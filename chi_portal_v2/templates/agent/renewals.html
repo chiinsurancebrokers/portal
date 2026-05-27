@@ -1,0 +1,119 @@
+{% extends "base.html" %}
+{% block title %}Ανανεώσεις — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-sync-alt me-2" style="color:#C9A96E"></i>Ανανεώσεις{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('agent_email_queue') }}" class="btn btn-sm" style="border:1px solid #E2E8F0;border-radius:8px;font-size:12px"><i class="fas fa-envelope me-1"></i>Email Queue</a>
+{% endblock %}
+{% block content %}
+
+<div class="chi-card mb-3 py-2">
+  <div class="d-flex align-items-center gap-3 flex-wrap">
+    <span style="font-size:13px;font-weight:600;color:#1B2B5E">Εμφάνιση ανανεώσεων για:</span>
+    {% for d in [7,14,30,60,90] %}
+    <a href="?days={{ d }}" class="btn btn-sm" style="{% if days==d %}background:#1B2B5E;color:white;{% else %}border:1px solid #E2E8F0;{% endif %}border-radius:20px;font-size:12px">{{ d }} ημέρες</a>
+    {% endfor %}
+    <span style="font-size:12px;color:#64748B">{{ renewals|length }} συμβόλαια</span>
+  </div>
+</div>
+
+{% if renewals %}
+<div class="chi-card">
+  <div class="chi-card-header"><i class="fas fa-list me-2"></i>Ληξιάριο — Επόμενες {{ days }} ημέρες</div>
+  <div class="table-responsive">
+    <table class="chi-table">
+      <thead>
+        <tr>
+          <th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Πάροχος</th>
+          <th>Λήξη</th><th>Ημέρες</th><th>Ασφάλιστρο</th>
+          <th>Email</th><th>Ενέργειες</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in renewals %}
+        <tr id="row-{{ r.policy.id }}">
+          <td>
+            {% if r.client %}
+            <a href="{{ url_for('agent_client_detail', client_id=r.client.id) }}" class="text-decoration-none fw-semibold" style="color:#1B2B5E">{{ r.client.name }}</a>
+            <div style="font-size:11px;color:#94A3B8">{{ r.client.email or '—' }}</div>
+            {% else %}—{% endif %}
+          </td>
+          <td>
+            <div style="font-size:13px;font-weight:500">{{ r.policy.policy_type }}</div>
+            {% if r.policy.license_plate %}<div style="font-size:11px;color:#94A3B8"><i class="fas fa-car me-1"></i>{{ r.policy.license_plate }}</div>{% endif %}
+            {% if r.policy.policy_number %}<div style="font-size:11px;color:#94A3B8">#{{ r.policy.policy_number }}</div>{% endif %}
+          </td>
+          <td style="font-size:12.5px">{{ r.policy.provider or '—' }}</td>
+          <td>
+            <span style="font-size:13px;font-weight:600;{% if r.days_left<=7 %}color:#DC2626{% elif r.days_left<=14 %}color:#92400E{% endif %}">
+              {{ r.policy.expiration_date.strftime('%d/%m/%Y') if r.policy.expiration_date else '—' }}
+            </span>
+          </td>
+          <td>
+            <span class="status-badge {% if r.days_left<=7 %}badge-overdue{% elif r.days_left<=14 %}badge-pending{% else %}badge-active{% endif %}">
+              {{ r.days_left }}d
+            </span>
+          </td>
+          <td class="fw-bold" style="color:#1B2B5E">€{{ "%.2f"|format(r.policy.premium or 0) }}</td>
+          <td>
+            {% if r.sent %}
+            <span class="status-badge badge-active" style="font-size:10px"><i class="fas fa-check me-1"></i>Στάλθηκε</span>
+            {% elif r.queued %}
+            <span class="status-badge badge-pending" style="font-size:10px"><i class="fas fa-clock me-1"></i>Στη Σειρά</span>
+            {% else %}
+            <span class="status-badge" style="background:#F1F5F9;color:#64748B;font-size:10px">Εκκρεμεί</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if not r.sent %}
+            <button onclick="draftRenewal({{ r.policy.id }}, this)" class="btn btn-sm btn-gold" style="font-size:11px;padding:4px 10px;border-radius:6px">
+              <i class="fas fa-robot me-1"></i>HAL Draft
+            </button>
+            {% else %}
+            <span style="font-size:11px;color:#94A3B8">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        <tr id="draft-row-{{ r.policy.id }}" style="display:none">
+          <td colspan="8">
+            <div class="hal-panel" style="padding:14px 18px;margin:6px 0">
+              <div class="hal-title"><i class="fas fa-envelope me-2"></i>HAL — Πρόχειρο Email Ανανέωσης</div>
+              <div id="draft-subject-{{ r.policy.id }}" style="color:#C9A96E;font-size:12px;margin-bottom:6px"></div>
+              <div id="draft-body-{{ r.policy.id }}" class="hal-output" style="font-size:12.5px;background:rgba(255,255,255,0.05);border-radius:6px;padding:10px"></div>
+            </div>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="chi-card text-center py-5">
+  <i class="fas fa-check-circle fa-3x mb-3 d-block" style="color:#16A34A"></i>
+  <div style="font-size:16px;color:#64748B">Δεν υπάρχουν ανανεώσεις για τις επόμενες {{ days }} ημέρες.</div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function draftRenewal(policyId, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>HAL γράφει...';
+  const draftRow = document.getElementById('draft-row-'+policyId);
+  draftRow.style.display = 'table-row';
+  document.getElementById('draft-subject-'+policyId).textContent = '⏳ Παράγεται...';
+  try {
+    const r = await fetch(`/agent/renewals/hal-draft/${policyId}`, {method:'POST'});
+    const d = await r.json();
+    document.getElementById('draft-subject-'+policyId).textContent = '📧 ' + (d.subject||'');
+    document.getElementById('draft-body-'+policyId).innerHTML = d.body_html || d.body || 'Σφάλμα δημιουργίας email';
+    btn.innerHTML = '<i class="fas fa-check me-1"></i>Στη Σειρά!';
+    btn.style.background = '#16A34A'; btn.style.color = 'white';
+  } catch(e) {
+    btn.innerHTML = '❌ Σφάλμα';
+    btn.disabled = false;
+  }
+}
+</script>
+{% endblock %}
