@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block title %}Νέος Πάροχος — CHI{% endblock %}
+{% block page_title %}Νέος Πάροχος{% endblock %}
+{% block content %}
+<div class="chi-card" style="max-width:600px">
+  <form method="POST">
+    <div class="row g-3">
+      <div class="col-md-8"><label class="form-label fw-semibold" style="font-size:13px">Επωνυμία *</label><input type="text" name="name" class="form-control" required></div>
+      <div class="col-md-4"><label class="form-label fw-semibold" style="font-size:13px">Συντομογραφία</label><input type="text" name="short_name" class="form-control"></div>
+      <div class="col-12"><label class="form-label fw-semibold" style="font-size:13px">Τομείς Δραστηριότητας</label><input type="text" name="sector" class="form-control" placeholder="π.χ. Αυτοκίνητο, Ζωή, Υγεία"></div>
+      <div class="col-md-6"><label class="form-label fw-semibold" style="font-size:13px">Υπεύθυνος Επικοινωνίας</label><input type="text" name="contact_person" class="form-control"></div>
+      <div class="col-md-6"><label class="form-label fw-semibold" style="font-size:13px">Email</label><input type="email" name="email" class="form-control"></div>
+      <div class="col-md-6"><label class="form-label fw-semibold" style="font-size:13px">Τηλέφωνο</label><input type="text" name="phone" class="form-control"></div>
+      <div class="col-md-6"><label class="form-label fw-semibold" style="font-size:13px">Website</label><input type="text" name="website" class="form-control"></div>
+      <div class="col-md-4"><label class="form-label fw-semibold" style="font-size:13px">Default Προμήθεια (%)</label><input type="number" name="default_commission" class="form-control" step="0.1"></div>
+      <div class="col-12"><label class="form-label fw-semibold" style="font-size:13px">Σημειώσεις</label><textarea name="notes" class="form-control" rows="3"></textarea></div>
+      <div class="col-12 d-flex gap-2">
+        <button type="submit" class="btn btn-chi px-4"><i class="fas fa-save me-2"></i>Προσθήκη</button>
+        <a href="{{ url_for('backoffice_providers') }}" class="btn" style="border:1px solid #E2E8F0">Ακύρωση</a>
+      </div>
+    </div>
+  </form>
+</div>
+{% endblock %}

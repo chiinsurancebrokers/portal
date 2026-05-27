@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Πληρωμές — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-credit-card me-2" style="color:#C9A96E"></i>Πληρωμές{% endblock %}
+{% block content %}
+
+<div class="d-flex gap-2 mb-3 flex-wrap">
+  {% for s, label in [('all','Όλες'),('pending','Εκκρεμείς'),('paid','Πληρωμένες'),('overdue','Ληξιπρόθεσμες')] %}
+  <a href="?status={{ s }}" class="btn btn-sm" style="{% if status_f==s %}background:#1B2B5E;color:white;{% else %}border:1px solid #E2E8F0;{% endif %}border-radius:20px;font-size:12px">{{ label }}</a>
+  {% endfor %}
+</div>
+
+<div class="chi-card">
+  <div class="table-responsive">
+    <table class="chi-table">
+      <thead>
+        <tr>
+          <th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Πάροχος</th><th>Κλάδος</th>
+          <th>Agent</th><th>Ποσό</th><th>Λήξη</th><th>Κατάσταση</th><th>Ενέργειες</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in payments %}
+        {% set pay = row.payment %}
+        <tr>
+          <td>
+            {% if row.client %}
+            <a href="{{ url_for('agent_client_detail', client_id=row.client.id) }}" class="text-decoration-none fw-semibold" style="color:#1B2B5E">{{ row.client.name }}</a>
+            {% if row.client.email %}<div style="font-size:11px;color:#94A3B8">{{ row.client.email }}</div>{% endif %}
+            {% else %}—{% endif %}
+          </td>
+          <td style="font-size:12.5px">
+            {{ row.policy.policy_type if row.policy else '—' }}
+            {% if row.policy and row.policy.policy_number %}
+            <div style="font-size:11px;color:#94A3B8">#{{ row.policy.policy_number }}</div>
+            {% endif %}
+            {% if row.policy and row.policy.payment_code %}
+            <div style="font-size:11px;color:#1B2B5E;font-family:monospace">RF: {{ row.policy.payment_code }}</div>
+            {% endif %}
+          </td>
+          <td style="font-size:12px;color:#64748B">{{ row.policy.provider if row.policy else '—' }}</td>
+          <td>
+            {% if row.policy and row.policy.sector %}
+            <span class="status-badge" style="background:#EEF2FF;color:#3730A3;font-size:10px">{{ row.policy.sector.value }}</span>
+            {% else %}—{% endif %}
+          </td>
+          <td style="font-size:12px;color:#94A3B8">{{ row.policy.agent if row.policy else '—' }}</td>
+          <td class="fw-bold" style="color:#1B2B5E">€{{ "%.2f"|format(pay.amount) }}</td>
+          <td style="font-size:12px">{{ pay.due_date.strftime('%d/%m/%Y') if pay.due_date else '—' }}</td>
+          <td>
+            <span class="status-badge badge-{{ pay.status.value|lower }}">{{ pay.status.value }}</span>
+            {% if pay.payment_date %}
+            <div style="font-size:10px;color:#94A3B8">{{ pay.payment_date.strftime('%d/%m/%Y') }}</div>
+            {% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1 flex-wrap">
+              <!-- Mark paid/unpaid -->
+              <form method="POST" action="{{ url_for('agent_update_payment', pay_id=pay.id) }}">
+                <input type="hidden" name="status" value="{% if pay.status.value=='PAID' %}PENDING{% else %}PAID{% endif %}">
+                <button type="submit" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap">
+                  {% if pay.status.value=='PAID' %}↩ Αναίρεση{% else %}✓ Πληρώθηκε{% endif %}
+                </button>
+              </form>
+              <!-- Send notification -->
+              {% if row.client and row.client.email and pay.status.value != 'PAID' %}
+              <button onclick="sendNotification({{ pay.id }}, this)" 
+                class="btn btn-sm py-0 px-2" 
+                style="font-size:10px;background:#1B2B5E;color:#C9A96E;border:none;border-radius:5px;white-space:nowrap">
+                <i class="fas fa-envelope me-1"></i>Ειδοποίηση
+              </button>
+              <a href="{{ url_for('agent_preview_payment_notification', pay_id=pay.id) }}" 
+                target="_blank"
+                class="btn btn-sm py-0 px-2" 
+                style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap">
+                👁 Preview
+              </a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center py-4" style="color:#94A3B8">Δεν υπάρχουν πληρωμές</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Toast notification -->
+<div id="toast" style="display:none;position:fixed;bottom:24px;right:24px;z-index:9999;background:#1B2B5E;color:white;padding:14px 20px;border-radius:10px;font-size:13.5px;box-shadow:0 4px 20px rgba(0,0,0,0.2);max-width:320px"></div>
+
+{% endblock %}
+{% block scripts %}
+<script>
+async function sendNotification(payId, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Αποστολή...';
+  try {
+    const r = await fetch(`/agent/payment/${payId}/notify`, {method:'POST'});
+    const d = await r.json();
+    const toast = document.getElementById('toast');
+    if (d.success) {
+      toast.style.background = '#16A34A';
+      toast.innerHTML = '<i class="fas fa-check-circle me-2"></i>' + d.message;
+      btn.innerHTML = '<i class="fas fa-check me-1"></i>Στάλθηκε!';
+      btn.style.background = '#16A34A';
+    } else {
+      toast.style.background = '#DC2626';
+      toast.innerHTML = '<i class="fas fa-times-circle me-2"></i>' + (d.error || 'Σφάλμα');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-envelope me-1"></i>Ειδοποίηση';
+      btn.style.background = '#1B2B5E';
+    }
+    toast.style.display = 'block';
+    setTimeout(() => toast.style.display = 'none', 4000);
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-envelope me-1"></i>Ειδοποίηση';
+  }
+}
+</script>
+{% endblock %}
