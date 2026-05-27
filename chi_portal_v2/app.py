@@ -98,6 +98,7 @@ def backoffice_index():
 def client_index():
     return redirect(url_for("client_dashboard"))
 
+@app.route("/login", methods=["GET", "POST"])
 def login():
     if "user_id" in session:
         return redirect(url_for("index"))
