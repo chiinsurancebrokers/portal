@@ -1,0 +1,353 @@
+{% extends "base.html" %}
+{% block title %}{{ client.name }} — CHI{% endblock %}
+{% block page_title %}
+<a href="{{ url_for('agent_clients') }}" style="color:#94A3B8;text-decoration:none;font-size:13px">Πελάτες</a>
+<span class="mx-2" style="color:#94A3B8">/</span>
+{{ client.name }}
+{% if client.vip %}<span class="status-badge badge-vip ms-2">VIP</span>{% endif %}
+{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('agent_edit_client', client_id=client.id) }}" class="btn btn-sm" style="border:1px solid #E2E8F0;border-radius:8px;font-size:12px"><i class="fas fa-edit me-1"></i>Επεξεργασία</a>
+<a href="{{ url_for('agent_add_policy', client_id=client.id) }}" class="btn btn-sm btn-gold px-3" style="font-size:12px"><i class="fas fa-plus me-1"></i>Νέο Συμβόλαιο</a>
+{% endblock %}
+{% block content %}
+
+<!-- Client Info + Totals -->
+<div class="row g-3 mb-4">
+  <div class="col-lg-5">
+    <div class="chi-card h-100">
+      <div class="chi-card-header"><i class="fas fa-user me-2"></i>Στοιχεία Πελάτη</div>
+      <div class="row g-2" style="font-size:13.5px">
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΟΝΟΜΑ</div><strong>{{ client.name }}</strong></div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΑΦΜ</div>{{ client.tax_id or '—' }}</div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΑΔΤ</div>{{ client.id_number or '—' }}</div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΓΕΝΝΗΣΗ</div>{{ client.date_of_birth or '—' }}</div>
+        <div class="col-12"><div style="color:#94A3B8;font-size:11px">EMAIL</div>{{ client.email or '—' }}</div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΤΗΛΕΦΩΝΟ</div>{{ client.phone or '—' }}</div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΚΙΝΗΤΟ</div>{{ client.mobile or '—' }}</div>
+        <div class="col-12"><div style="color:#94A3B8;font-size:11px">ΔΙΕΥΘΥΝΣΗ</div>{{ client.address or '' }}{% if client.city %}, {{ client.city }}{% endif %} {{ client.postal_code or '' }}</div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΕΠΑΓΓΕΛΜΑ</div>{{ client.profession or '—' }}</div>
+        <div class="col-6"><div style="color:#94A3B8;font-size:11px">ΕΤΑΙΡΕΙΑ</div>{{ client.company_name or '—' }}</div>
+        {% if client.notes %}<div class="col-12"><div style="color:#94A3B8;font-size:11px">ΣΗΜΕΙΩΣΕΙΣ</div>{{ client.notes }}</div>{% endif %}
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-7">
+    <div class="row g-3 h-100">
+      <div class="col-6">
+        <div class="chi-card text-center">
+          <div style="font-size:28px;font-weight:800;color:#1B2B5E">€{{ "{:,.0f}".format(total_premium) }}</div>
+          <div style="font-size:11px;color:#64748B;margin-top:4px">Συνολικά Ενεργά Ασφάλιστρα</div>
+        </div>
+      </div>
+      <div class="col-6">
+        <div class="chi-card text-center">
+          <div style="font-size:28px;font-weight:800;color:#16A34A">€{{ "{:,.0f}".format(total_commission) }}</div>
+          <div style="font-size:11px;color:#64748B;margin-top:4px">Εκτιμ. Προμήθεια</div>
+        </div>
+      </div>
+      <!-- HAL Upsell Panel -->
+      <div class="col-12">
+        <div class="hal-panel" style="padding:16px 18px">
+          <div class="hal-title"><i class="fas fa-robot me-2"></i>HAL — Στρατηγική Upselling</div>
+          <div id="upsell-output" style="font-size:12.5px;color:rgba(255,255,255,0.8);min-height:40px">
+            Πάτα για ανάλυση upselling ευκαιριών για αυτόν τον πελάτη...
+          </div>
+          <button onclick="loadUpsell()" class="btn btn-sm btn-gold mt-2 px-3">
+            <i class="fas fa-lightbulb me-1"></i>Ανάλυση HAL
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Policies -->
+<div class="chi-card mb-3">
+  <div class="chi-card-header">
+    <i class="fas fa-file-contract me-2"></i>Ασφαλιστήρια Συμβόλαια ({{ pol_data|length }})
+    <a href="{{ url_for('agent_add_policy', client_id=client.id) }}" class="btn btn-sm btn-gold float-end" style="font-size:11px;padding:3px 12px">+ Νέο</a>
+  </div>
+  {% for pd in pol_data %}
+  {% set p = pd.policy %}
+  <div class="p-3 mb-2" style="background:#F8FAFC;border-radius:10px;border:1px solid #E2E8F0">
+    <div class="d-flex align-items-start justify-content-between flex-wrap gap-2">
+      <div>
+        <div class="d-flex align-items-center gap-2 flex-wrap">
+          <strong style="font-size:14px;color:#1B2B5E">{{ p.policy_type or 'Χωρίς τίτλο' }}</strong>
+          <span class="status-badge {% if p.status_name=='ACTIVE' %}badge-active{% elif p.status_name=='EXPIRED' %}badge-expired{% else %}badge-cancelled{% endif %}" style="font-size:10px">{{ p.status.value }}</span>
+          {% if p.sector %}<span class="status-badge sect-{{ p.sector_name|lower }}" style="font-size:10px">{{ p.sector }}</span>{% endif %}
+        </div>
+        <div style="font-size:12px;color:#64748B;margin-top:4px">
+          <span><i class="fas fa-building me-1"></i>{{ p.provider or '—' }}</span>
+          {% if p.policy_number %}<span class="ms-3"><i class="fas fa-hashtag me-1"></i>{{ p.policy_number }}</span>{% endif %}
+          {% if p.license_plate %}<span class="ms-3"><i class="fas fa-car me-1"></i>{{ p.license_plate }}</span>{% endif %}
+        </div>
+      </div>
+      <div class="text-end">
+        <div style="font-size:18px;font-weight:800;color:#1B2B5E">€{{ "{:,.2f}".format(p.premium or 0) }}</div>
+        <div style="font-size:11px;color:#94A3B8">{{ p.payment_frequency or '' }}</div>
+        {% if pd.commission > 0 %}
+        <div style="font-size:12px;color:#16A34A;font-weight:600">Προμ.: €{{ "{:,.2f}".format(pd.commission) }} ({{ p.commission_rate or 0 }}%)</div>
+        {% endif %}
+      </div>
+    </div>
+    <div class="d-flex align-items-center gap-4 mt-2 flex-wrap" style="font-size:12px;color:#64748B">
+      <span><i class="fas fa-calendar-check me-1"></i>{{ p.start_date or '—' }}</span>
+      <span>→</span>
+      <span {% if pd.days_left is not none and pd.days_left <= 30 %}style="color:#DC2626;font-weight:600"{% endif %}>
+        <i class="fas fa-calendar-times me-1"></i>{{ p.expiration_date or '—' }}
+        {% if pd.days_left is not none %}({{ pd.days_left }} ημ.){% endif %}
+      </span>
+      {% if pd.next_payment %}
+      <span style="color:#92400E"><i class="fas fa-clock me-1"></i>Επ. πληρωμή: €{{ "{:,.2f}".format(pd.next_payment.amount) }} — {{ pd.next_payment.due_date.strftime('%d/%m/%Y') }}</span>
+      {% endif %}
+      {% if pd.overdue %}
+      <span style="color:#DC2626;font-weight:600"><i class="fas fa-exclamation-circle me-1"></i>{{ pd.overdue|length }} ληξιπρόθεσμες</span>
+      {% endif %}
+    </div>
+    <div class="d-flex gap-2 mt-2 flex-wrap">
+      <button onclick="loadHalExplanation({{ p.id }})" class="btn btn-sm" style="background:#1B2B5E;color:#C9A96E;border:none;font-size:11px;border-radius:6px;padding:4px 10px">
+        <i class="fas fa-robot me-1"></i>HAL Ανάλυση
+      </button>
+      <a href="{{ url_for('agent_edit_policy', policy_id=p.id) }}" class="btn btn-sm" style="border:1px solid #E2E8F0;font-size:11px;border-radius:6px;padding:4px 10px">
+        <i class="fas fa-edit me-1"></i>Επεξεργασία
+      </a>
+      <button class="btn btn-sm" onclick="togglePayments('pay-{{ p.id }}')" style="border:1px solid #E2E8F0;font-size:11px;border-radius:6px;padding:4px 10px">
+        <i class="fas fa-credit-card me-1"></i>Πληρωμές ({{ pd.payments|length }})
+      </button>
+      <form method="POST" action="{{ url_for('agent_delete_policy', policy_id=p.id) }}" style="display:inline" onsubmit="return confirm('Διαγραφή συμβολαίου;')">
+        <button type="submit" class="btn btn-sm" style="border:1px solid #FEE2E2;color:#DC2626;background:white;font-size:11px;border-radius:6px;padding:4px 10px">
+          <i class="fas fa-trash me-1"></i>Διαγραφή
+        </button>
+      </form>
+    </div>
+    <!-- HAL Output for this policy -->
+    <div id="hal-{{ p.id }}" class="hal-panel mt-2" style="display:none;padding:14px 16px">
+      <div class="hal-title"><i class="fas fa-robot me-1"></i>HAL — Ανάλυση Συμβολαίου</div>
+      <div class="hal-output" id="hal-text-{{ p.id }}" style="font-size:12.5px"></div>
+    </div>
+    <!-- Payments collapse -->
+    <div id="pay-{{ p.id }}" style="display:none;margin-top:10px">
+      <table class="chi-table" style="font-size:12px">
+        <thead><tr><th>Ημ. Λήξης</th><th>Ποσό</th><th>Κατάσταση</th><th>Πληρώθηκε</th><th></th></tr></thead>
+        <tbody>
+          {% for pay in pd.payments %}
+          <tr>
+            <td>{{ pay.due_date or '—' }}</td>
+            <td>€{{ "{:,.2f}".format(pay.amount) }}</td>
+            <td><span class="status-badge badge-{{ pay.status|lower }}">{{ pay.status.value }}</span></td>
+            <td>{{ pay.payment_date or '—' }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('agent_update_payment', pay_id=pay.id) }}">
+                <input type="hidden" name="status" value="{% if pay.status_name=='PAID' %}PENDING{% else %}PAID{% endif %}">
+                <button type="submit" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #E2E8F0">
+                  {% if pay.status_name=='PAID' %}↩ Αναίρεση{% else %}✓ Πληρώθηκε{% endif %}
+                </button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% else %}
+  <div class="text-center py-4" style="color:#94A3B8"><i class="fas fa-file-alt fa-2x d-block mb-2"></i>Δεν υπάρχουν συμβόλαια</div>
+  {% endfor %}
+</div>
+
+<!-- Bottom row: Tickets + Claims + Documents -->
+<div class="row g-3">
+  <!-- Tickets -->
+  <div class="col-lg-4">
+    <div class="chi-card">
+      <div class="chi-card-header">
+        <i class="fas fa-ticket-alt me-2"></i>Tickets
+        <button class="btn btn-sm float-end" style="font-size:10px;border:1px solid #E2E8F0;padding:2px 8px;border-radius:6px" data-bs-toggle="modal" data-bs-target="#addTicketModal">+ Νέο</button>
+      </div>
+      {% for t in tickets[:5] %}
+      <div class="py-2" style="border-bottom:1px solid #F1F5F9;font-size:12.5px">
+        <div class="fw-semibold">{{ t.subject[:50] }}</div>
+        <div class="d-flex gap-2 mt-1">
+          <span class="status-badge badge-{{ t.status_name|lower }}" style="font-size:10px">{{ t.status }}</span>
+          <span class="status-badge badge-{{ t.priority.name|lower }}" style="font-size:10px">{{ t.priority }}</span>
+        </div>
+      </div>
+      {% else %}<div style="color:#94A3B8;font-size:12px;text-align:center;padding:12px">Δεν υπάρχουν tickets</div>{% endfor %}
+    </div>
+  </div>
+  <!-- Claims -->
+  <div class="col-lg-4">
+    <div class="chi-card">
+      <div class="chi-card-header">
+        <i class="fas fa-gavel me-2"></i>Αξιώσεις
+        <button class="btn btn-sm float-end" style="font-size:10px;border:1px solid #E2E8F0;padding:2px 8px;border-radius:6px" data-bs-toggle="modal" data-bs-target="#addClaimModal">+ Νέα</button>
+      </div>
+      {% for c in claims[:5] %}
+      <div class="py-2" style="border-bottom:1px solid #F1F5F9;font-size:12.5px">
+        <div class="fw-semibold">{{ c.description[:50] }}</div>
+        <div class="d-flex gap-2 mt-1">
+          <span class="status-badge badge-open" style="font-size:10px">{{ c.status.value }}</span>
+          {% if c.claim_amount %}<span style="color:#1B2B5E;font-size:11px">€{{ "{:,.0f}".format(c.claim_amount) }}</span>{% endif %}
+        </div>
+      </div>
+      {% else %}<div style="color:#94A3B8;font-size:12px;text-align:center;padding:12px">Δεν υπάρχουν αξιώσεις</div>{% endfor %}
+    </div>
+  </div>
+  <!-- Documents -->
+  <div class="col-lg-4">
+    <div class="chi-card">
+      <div class="chi-card-header">
+        <i class="fas fa-folder me-2"></i>Έγγραφα
+        <button class="btn btn-sm float-end" style="font-size:10px;border:1px solid #E2E8F0;padding:2px 8px;border-radius:6px" data-bs-toggle="modal" data-bs-target="#uploadDocModal">+ Upload</button>
+      </div>
+      {% for doc in documents[:6] %}
+      <div class="d-flex align-items-center justify-content-between py-2" style="border-bottom:1px solid #F1F5F9;font-size:12px">
+        <div>
+          <i class="fas fa-file-{{ 'pdf' if doc.file_type=='pdf' else 'image' if doc.file_type in ('jpg','png') else 'alt' }} me-2" style="color:#94A3B8"></i>
+          {{ doc.original_filename[:30] or doc.filename }}
+        </div>
+        <a href="{{ url_for('download_document', doc_id=doc.id) }}" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #E2E8F0">⬇</a>
+      </div>
+      {% else %}<div style="color:#94A3B8;font-size:12px;text-align:center;padding:12px">Δεν υπάρχουν έγγραφα</div>{% endfor %}
+    </div>
+  </div>
+</div>
+
+<!-- MODALS -->
+<!-- Add Ticket -->
+<div class="modal fade" id="addTicketModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content" style="border-radius:12px">
+    <div class="modal-header" style="background:#1B2B5E;color:white;border-radius:12px 12px 0 0">
+      <h6 class="modal-title">Νέο Ticket</h6>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+    </div>
+    <form method="POST" action="{{ url_for('agent_add_ticket') }}">
+      <div class="modal-body">
+        <input type="hidden" name="client_id" value="{{ client.id }}">
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Θέμα</label>
+          <input type="text" name="subject" class="form-control" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Συμβόλαιο</label>
+          <select name="policy_id" class="form-select">
+            <option value="">— Γενικό —</option>
+            {% for pd in pol_data %}<option value="{{ pd.policy.id }}">{{ pd.policy.policy_type }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Περιγραφή</label>
+          <textarea name="description" class="form-control" rows="3"></textarea>
+        </div>
+        <div>
+          <label class="form-label fw-semibold" style="font-size:13px">Προτεραιότητα</label>
+          <select name="priority" class="form-select">
+            <option value="LOW">Χαμηλή</option>
+            <option value="MEDIUM" selected>Μεσαία</option>
+            <option value="HIGH">Υψηλή</option>
+            <option value="URGENT">Επείγον</option>
+          </select>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="submit" class="btn btn-chi">Δημιουργία</button></div>
+    </form>
+  </div></div>
+</div>
+
+<!-- Add Claim -->
+<div class="modal fade" id="addClaimModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content" style="border-radius:12px">
+    <div class="modal-header" style="background:#1B2B5E;color:white;border-radius:12px 12px 0 0">
+      <h6 class="modal-title">Νέα Αξίωση</h6>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+    </div>
+    <form method="POST" action="{{ url_for('agent_add_claim', client_id=client.id) }}">
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Συμβόλαιο</label>
+          <select name="policy_id" class="form-select" required>
+            {% for pd in pol_data %}<option value="{{ pd.policy.id }}">{{ pd.policy.policy_type }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Αρ. Αξίωσης</label>
+          <input type="text" name="claim_number" class="form-control">
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Περιγραφή</label>
+          <textarea name="description" class="form-control" rows="3" required></textarea>
+        </div>
+        <div class="row g-2">
+          <div class="col-6">
+            <label class="form-label fw-semibold" style="font-size:13px">Ποσό (€)</label>
+            <input type="number" name="claim_amount" class="form-control" step="0.01">
+          </div>
+          <div class="col-6">
+            <label class="form-label fw-semibold" style="font-size:13px">Ημ. Συμβάντος</label>
+            <input type="date" name="incident_date" class="form-control">
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="submit" class="btn btn-chi">Καταχώρηση</button></div>
+    </form>
+  </div></div>
+</div>
+
+<!-- Upload Doc -->
+<div class="modal fade" id="uploadDocModal" tabindex="-1">
+  <div class="modal-dialog"><div class="modal-content" style="border-radius:12px">
+    <div class="modal-header" style="background:#1B2B5E;color:white;border-radius:12px 12px 0 0">
+      <h6 class="modal-title">Upload Εγγράφου</h6>
+      <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+    </div>
+    <form method="POST" action="{{ url_for('agent_upload_document', client_id=client.id) }}" enctype="multipart/form-data">
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Αρχείο</label>
+          <input type="file" name="file" class="form-control" accept=".pdf,.jpg,.png,.docx,.xlsx" required>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Συνδεδεμένο Συμβόλαιο</label>
+          <select name="policy_id" class="form-select">
+            <option value="">— Γενικό Έγγραφο —</option>
+            {% for pd in pol_data %}<option value="{{ pd.policy.id }}">{{ pd.policy.policy_type }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="form-check">
+          <input class="form-check-input" type="checkbox" name="is_policy_doc" id="isPolicyDoc">
+          <label class="form-check-label" for="isPolicyDoc" style="font-size:13px">Είναι ασφαλιστήριο</label>
+        </div>
+      </div>
+      <div class="modal-footer"><button type="submit" class="btn btn-chi">Upload</button></div>
+    </form>
+  </div></div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function togglePayments(id) {
+  const el = document.getElementById(id);
+  el.style.display = el.style.display==='none' ? 'block' : 'none';
+}
+async function loadHalExplanation(policyId) {
+  const panel = document.getElementById('hal-'+policyId);
+  const text  = document.getElementById('hal-text-'+policyId);
+  panel.style.display = 'block';
+  text.textContent = '⏳ HAL αναλύει το συμβόλαιο...';
+  const r = await fetch(`/agent/policy/${policyId}/hal`, {method:'POST'});
+  const d = await r.json();
+  text.textContent = d.explanation;
+}
+async function loadUpsell() {
+  const out = document.getElementById('upsell-output');
+  out.textContent = '⏳ HAL αναλύει ευκαιρίες upselling...';
+  const r = await fetch('{{ url_for("agent_hal_upsell", client_id=client.id) }}');
+  const d = await r.json();
+  out.textContent = d.analysis;
+}
+</script>
+{% endblock %}
