@@ -1418,11 +1418,11 @@ def _parse_lixiario_csv(file_bytes):
         sector_raw = parts[3].strip().upper()
         sector = SECTOR_MAP.get(sector_raw, m.PolicySector.OTHER)
         rows.append({
-            "start_date":    start_date,
-            "expiry_date":   expiry_date,
+            "start_date":    str(start_date) if start_date else None,
+            "expiry_date":   str(expiry_date) if expiry_date else None,
             "provider":      parts[2].strip(),
             "sector_raw":    parts[3].strip(),
-            "sector":        sector,
+            "sector":        sector.name,
             "policy_number": parts[4].strip(),
             "receipt":       parts[5].strip(),
             "kind":          parts[6].strip(),
@@ -1514,11 +1514,15 @@ def agent_import():
                     skipped += 1
                     continue
 
-                # Map sector
+                # Map sector from stored name string
                 sector = m.PolicySector.OTHER
-                for k, v in SECTOR_MAP.items():
-                    if k in (r.get("sector_raw","").upper()):
-                        sector = v; break
+                sector_name = r.get("sector", "OTHER")
+                try:
+                    sector = m.PolicySector[sector_name]
+                except (KeyError, ValueError):
+                    for k, v in SECTOR_MAP.items():
+                        if k in (r.get("sector_raw","").upper()):
+                            sector = v; break
 
                 expiry_date = None
                 start_date  = None
