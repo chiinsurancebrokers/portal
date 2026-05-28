@@ -1,0 +1,200 @@
+{% extends "base.html" %}
+{% block title %}Agents — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-user-tie me-2" style="color:#C9A96E"></i>Agents / Συνεργάτες{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('admin_add_agent') }}" class="btn btn-sm btn-gold rounded-pill px-3">
+  <i class="fas fa-plus me-1"></i><span class="d-none d-sm-inline">Νέος </span>Agent
+</a>
+{% endblock %}
+
+{% block content %}
+<div class="chi-card mb-3" style="background:linear-gradient(135deg,#EEF2FF,#F8FAFC);border-color:#C7D2FE">
+  <div style="font-size:13px;color:#3730A3">
+    <i class="fas fa-info-circle me-2"></i>
+    <strong>Agents</strong> = εξωτερικές εταιρείες συνεργατών με δικό τους πελατολόγιο.
+    Ο κωδικός (π.χ. <code>okto</code>, <code>fml</code>) αντιστοιχεί στο πεδίο "Συνεργάτης" των συμβολαίων.
+  </div>
+</div>
+
+{% if not agents %}
+<div class="chi-card text-center py-5">
+  <i class="fas fa-user-tie fa-3x d-block mb-3" style="color:#E2E8F0"></i>
+  <div style="font-size:15px;font-weight:600;color:#94A3B8;margin-bottom:20px">Δεν υπάρχουν agents ακόμα</div>
+  <a href="{{ url_for('admin_add_agent') }}" class="btn btn-chi px-4">
+    <i class="fas fa-plus me-2"></i>Δημιουργία πρώτου Agent
+  </a>
+</div>
+
+{% else %}
+<div class="row g-3">
+  {% for row in agents %}
+  {% set ag = row.agent %}
+  <div class="col-lg-6">
+    <div class="chi-card">
+      <!-- Header -->
+      <div class="d-flex align-items-start justify-content-between mb-3">
+        <div>
+          <div class="d-flex align-items-center gap-2 flex-wrap">
+            <span style="background:var(--chi-navy);color:var(--chi-gold);padding:4px 14px;border-radius:20px;font-size:14px;font-weight:900;letter-spacing:2px;font-family:monospace">
+              {{ ag.code|upper }}
+            </span>
+            {% if not ag.active %}
+            <span class="status-badge badge-cancelled" style="font-size:10px">Ανενεργός</span>
+            {% endif %}
+          </div>
+          <div style="font-size:16px;font-weight:700;color:var(--chi-navy);margin-top:8px">{{ ag.name }}</div>
+          {% if ag.company_name and ag.company_name != ag.name %}
+          <div style="font-size:12px;color:#64748B">{{ ag.company_name }}</div>
+          {% endif %}
+          {% if ag.tax_id %}<div style="font-size:11.5px;color:#94A3B8">ΑΦΜ: {{ ag.tax_id }}</div>{% endif %}
+        </div>
+        <a href="{{ url_for('admin_edit_agent', agent_id=ag.id) }}" class="btn btn-sm" style="border:1px solid #E2E8F0;font-size:11px">
+          <i class="fas fa-edit me-1"></i>Επεξ.
+        </a>
+      </div>
+
+      <!-- Contact -->
+      <div class="d-flex gap-3 mb-3 flex-wrap" style="font-size:12.5px">
+        {% if ag.email %}<span><i class="fas fa-envelope me-1" style="color:#94A3B8"></i>{{ ag.email }}</span>{% endif %}
+        {% if ag.phone %}<span><i class="fas fa-phone me-1" style="color:#94A3B8"></i>{{ ag.phone }}</span>{% endif %}
+        {% if ag.address %}<span style="color:#94A3B8;font-size:11px"><i class="fas fa-map-marker-alt me-1"></i>{{ ag.address[:40] }}</span>{% endif %}
+      </div>
+
+      <!-- Stats -->
+      <div class="row g-2 mb-3">
+        <div class="col-3 text-center p-2" style="border:1px solid #E2E8F0;border-radius:8px">
+          <div style="font-size:20px;font-weight:800;color:var(--chi-navy)">{{ row.clients_count }}</div>
+          <div style="font-size:10px;color:#64748B">Πελάτες</div>
+        </div>
+        <div class="col-3 text-center p-2" style="border:1px solid #E2E8F0;border-radius:8px">
+          <div style="font-size:20px;font-weight:800;color:var(--chi-navy)">{{ row.pol_count }}</div>
+          <div style="font-size:10px;color:#64748B">Συμβόλαια</div>
+        </div>
+        <div class="col-3 text-center p-2" style="border:1px solid #E2E8F0;border-radius:8px">
+          <div style="font-size:15px;font-weight:800;color:var(--chi-gold)">€{{ "{:,.0f}".format(row.total_premium) }}</div>
+          <div style="font-size:10px;color:#64748B">Ασφάλιστρα</div>
+        </div>
+        <div class="col-3 text-center p-2" style="border:1px solid #E2E8F0;border-radius:8px">
+          <div style="font-size:15px;font-weight:800;color:#16A34A">€{{ "{:,.0f}".format(row.commission) }}</div>
+          <div style="font-size:10px;color:#64748B">Προμήθεια</div>
+        </div>
+      </div>
+
+      <!-- Portal Access -->
+      <div style="background:#F8FAFC;border-radius:8px;padding:10px 14px">
+        <div style="font-size:10px;font-weight:700;color:#64748B;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px">Portal Access</div>
+        {% if row.user_email %}
+        <div class="d-flex align-items-center justify-content-between gap-2 flex-wrap">
+          <div>
+            <span class="status-badge badge-active" style="font-size:10px"><i class="fas fa-check me-1"></i>Ενεργός</span>
+            <span style="font-size:12px;color:#374151;margin-left:8px">{{ row.user_email }}</span>
+          </div>
+          <button class="btn btn-sm" style="font-size:10px;border:1px solid #E2E8F0;border-radius:6px"
+                  data-bs-toggle="modal" data-bs-target="#resetModal{{ ag.id }}">
+            <i class="fas fa-key me-1"></i>Reset PW
+          </button>
+        </div>
+        {% else %}
+        <div class="d-flex align-items-center justify-content-between">
+          <span class="status-badge badge-cancelled" style="font-size:10px"><i class="fas fa-lock me-1"></i>Χωρίς πρόσβαση</span>
+          <button class="btn btn-sm btn-chi" style="font-size:10px;padding:4px 10px"
+                  data-bs-toggle="modal" data-bs-target="#createUserModal{{ ag.id }}">
+            <i class="fas fa-plus me-1"></i>Δημιουργία User
+          </button>
+        </div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  <!-- Create User Modal -->
+  <div class="modal fade" id="createUserModal{{ ag.id }}" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content" style="border-radius:12px">
+      <div class="modal-header" style="background:var(--chi-navy);color:white;border-radius:12px 12px 0 0">
+        <h6 class="modal-title"><i class="fas fa-user-plus me-2"></i>Portal Access — {{ ag.name }}</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" action="{{ url_for('admin_create_agent_user', agent_id=ag.id) }}">
+        <div class="modal-body">
+          <div class="mb-3">
+            <label class="form-label fw-semibold" style="font-size:13px">Email σύνδεσης</label>
+            <input type="email" name="email" class="form-control" value="{{ ag.email or '' }}" required placeholder="agent@company.gr">
+          </div>
+          <div class="mb-2">
+            <label class="form-label fw-semibold" style="font-size:13px">Password</label>
+            <div class="position-relative">
+              <input type="text" name="password" id="cpw_{{ ag.id }}" class="form-control"
+                     value="YouM@tt3r!" required style="font-family:monospace;padding-right:44px">
+              <button type="button" onclick="togglePwField('cpw_{{ ag.id }}')"
+                      class="btn position-absolute" style="right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:#94A3B8;padding:4px">
+                <i class="fas fa-eye" id="cpw_icon_{{ ag.id }}"></i>
+              </button>
+            </div>
+            <div style="font-size:11px;color:#94A3B8;margin-top:4px">
+              Default <strong>YouM@tt3r!</strong> → υποχρεωτική αλλαγή στην πρώτη σύνδεση.
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-sm" style="border:1px solid #E2E8F0" data-bs-dismiss="modal">Ακύρωση</button>
+          <button type="submit" class="btn btn-chi"><i class="fas fa-user-plus me-1"></i>Δημιουργία</button>
+        </div>
+      </form>
+    </div></div>
+  </div>
+
+  <!-- Reset PW Modal -->
+  <div class="modal fade" id="resetModal{{ ag.id }}" tabindex="-1">
+    <div class="modal-dialog"><div class="modal-content" style="border-radius:12px">
+      <div class="modal-header" style="background:var(--chi-navy);color:white;border-radius:12px 12px 0 0">
+        <h6 class="modal-title"><i class="fas fa-key me-2"></i>Reset Password — {{ row.user_email or '' }}</h6>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <form method="POST" action="{{ url_for('admin_create_agent_user', agent_id=ag.id) }}">
+        <input type="hidden" name="email" value="{{ row.user_email or '' }}">
+        <div class="modal-body">
+          <div>
+            <label class="form-label fw-semibold" style="font-size:13px">Νέο Password</label>
+            <div class="position-relative">
+              <input type="text" name="password" id="rpw_{{ ag.id }}" class="form-control"
+                     value="YouM@tt3r!" required style="font-family:monospace;padding-right:44px">
+              <button type="button" onclick="togglePwField('rpw_{{ ag.id }}')"
+                      class="btn position-absolute" style="right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:#94A3B8;padding:4px">
+                <i class="fas fa-eye" id="rpw_icon_{{ ag.id }}"></i>
+              </button>
+            </div>
+            <div style="font-size:11px;color:#94A3B8;margin-top:4px">
+              <strong>YouM@tt3r!</strong> → θα αλλάξει κατά πρώτη σύνδεση.<br>
+              Custom password → χρησιμοποιεί αμέσως χωρίς force change.
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-sm" style="border:1px solid #E2E8F0" data-bs-dismiss="modal">Ακύρωση</button>
+          <button type="submit" class="btn btn-chi"><i class="fas fa-key me-1"></i>Reset</button>
+        </div>
+      </form>
+    </div></div>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+function togglePwField(id) {
+  const inp = document.getElementById(id);
+  const iconId = id.replace('cpw_','cpw_icon_').replace('rpw_','rpw_icon_');
+  const icon = document.getElementById(iconId);
+  if (!inp || !icon) return;
+  if (icon.classList.contains('fa-eye')) {
+    icon.classList.replace('fa-eye','fa-eye-slash');
+    inp.type = 'password';
+  } else {
+    icon.classList.replace('fa-eye-slash','fa-eye');
+    inp.type = 'text';
+  }
+}
+</script>
+{% endblock %}
