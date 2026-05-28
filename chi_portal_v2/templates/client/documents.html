@@ -1,0 +1,49 @@
+{% extends "base.html" %}
+{% block title %}Έγγραφα — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-folder me-2" style="color:#C9A96E"></i>Έγγραφά μου{% endblock %}
+{% block content %}
+<div class="row g-3">
+  <div class="col-lg-4">
+    <div class="chi-card">
+      <div class="chi-card-header"><i class="fas fa-upload me-2"></i>Ανέβασμα Εγγράφου</div>
+      <form method="POST" enctype="multipart/form-data">
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Αρχείο</label>
+          <input type="file" name="file" class="form-control" accept=".pdf,.jpg,.png,.docx" required>
+          <div style="font-size:11px;color:#94A3B8;margin-top:4px">PDF, JPG, PNG, DOCX · Μέγ. 16MB</div>
+        </div>
+        <div class="mb-3">
+          <label class="form-label fw-semibold" style="font-size:13px">Σχετικό Συμβόλαιο</label>
+          <select name="policy_id" class="form-select">
+            <option value="">— Γενικό Έγγραφο —</option>
+            {% for p in policies %}<option value="{{ p.id }}">{{ p.policy_type }}</option>{% endfor %}
+          </select>
+        </div>
+        <button type="submit" class="btn btn-chi w-100"><i class="fas fa-upload me-2"></i>Ανέβασμα</button>
+      </form>
+    </div>
+  </div>
+  <div class="col-lg-8">
+    <div class="chi-card">
+      <div class="chi-card-header"><i class="fas fa-list me-2"></i>Έγγραφά μου ({{ documents|length }})</div>
+      {% for doc in documents %}
+      <div class="d-flex align-items-center justify-content-between p-3 mb-2" style="background:#F8FAFC;border-radius:8px;border:1px solid #E2E8F0">
+        <div>
+          <i class="fas fa-file-{{ 'pdf' if doc.file_type=='pdf' else 'image' if doc.file_type in ('jpg','jpeg','png') else 'alt' }} me-2" style="color:#94A3B8;font-size:16px"></i>
+          <span class="fw-semibold" style="font-size:13.5px">{{ doc.original_filename or doc.filename }}</span>
+          <div style="font-size:11px;color:#94A3B8;margin-top:2px">
+            {{ doc.uploaded_date | chi_date }}
+            {% if doc.file_size %} · {{ "{:,.0f}".format(doc.file_size/1024) }} KB{% endif %}
+          </div>
+        </div>
+        <a href="{{ url_for('download_document', doc_id=doc.id) }}" class="btn btn-sm btn-chi" style="font-size:12px">
+          <i class="fas fa-download me-1"></i>Λήψη
+        </a>
+      </div>
+      {% else %}
+      <div class="text-center py-4" style="color:#94A3B8"><i class="fas fa-folder-open fa-2x d-block mb-2"></i>Δεν υπάρχουν έγγραφα</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
