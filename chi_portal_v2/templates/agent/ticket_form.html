@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Νέο Ticket{% endblock %}
+{% block page_title %}<i class="fas fa-ticket-alt me-2"></i>Νέο Ticket{% endblock %}
+{% block content %}
+<div class="chi-card" style="max-width:600px">
+  <form method="POST">
+    <div class="mb-3">
+      <label class="form-label fw-semibold">Πελάτης</label>
+      <select name="client_id" class="form-select" required>
+        <option value="">Επιλογή πελάτη...</option>
+        {% for c in clients %}<option value="{{ c.id }}">{{ c.name }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-semibold">Θέμα</label>
+      <input type="text" name="subject" class="form-control" required>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-semibold">Περιγραφή</label>
+      <textarea name="description" class="form-control" rows="4"></textarea>
+    </div>
+    <div class="mb-3">
+      <label class="form-label fw-semibold">Προτεραιότητα</label>
+      <select name="priority" class="form-select">
+        {% for p in priorities %}<option value="{{ p.name }}">{{ p.value }}</option>{% endfor %}
+      </select>
+    </div>
+    <div class="d-flex gap-2">
+      <button type="submit" class="btn btn-chi px-4">Δημιουργία</button>
+      <a href="{{ url_for('agent_tickets') }}" class="btn" style="border:1px solid #E2E8F0">Ακύρωση</a>
+    </div>
+  </form>
+</div>
+{% endblock %}
