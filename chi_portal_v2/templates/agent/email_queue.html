@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block title %}Email Queue — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-envelope me-2" style="color:#C9A96E"></i>Email Queue{% endblock %}
+{% block content %}
+<div class="chi-card">
+  <table class="chi-table">
+    <thead><tr><th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Email</th><th>Θέμα</th><th>Κατάσταση</th><th>Ημ. Δημ.</th><th></th></tr></thead>
+    <tbody>
+      {% for row in emails %}
+      {% set e = row.eq %}
+      <tr>
+        <td class="fw-semibold" style="color:#1B2B5E">{{ row.client_name }}</td>
+        <td style="font-size:12px">{{ row.policy_type }}</td>
+        <td style="font-size:12px">{{ e.recipient_email }}</td>
+        <td style="font-size:12px">{{ (e.subject or '')[:50] }}</td>
+        <td>
+          {% if e.status_name=='QUEUED' %}<span class="status-badge badge-pending" style="font-size:10px">Σε Σειρά</span>
+          {% elif e.status_name=='SENT' %}<span class="status-badge badge-active" style="font-size:10px">Στάλθηκε</span>
+          {% else %}<span class="status-badge badge-overdue" style="font-size:10px">Αποτυχία</span>{% endif %}
+        </td>
+        <td style="font-size:12px">{{ e.created_date or '—' }}</td>
+        <td>
+          {% if e.status_name=='QUEUED' %}
+          <form method="POST" action="{{ url_for('agent_send_email', eq_id=e.id) }}" style="display:inline">
+            <button type="submit" class="btn btn-sm btn-gold" style="font-size:11px;padding:4px 10px">
+              <i class="fas fa-paper-plane me-1"></i>Αποστολή
+            </button>
+          </form>
+          {% elif e.status_name=='SENT' %}
+          <span style="font-size:11px;color:#94A3B8">{{ e.sent_at or '' }}</span>
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7" class="text-center py-5" style="color:#94A3B8">Δεν υπάρχουν emails στη σειρά</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
