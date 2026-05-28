@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Agent Dashboard — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-tachometer-alt me-2" style="color:#C9A96E"></i>Agent Dashboard{% endblock %}
+
+{% block topbar_actions %}
+<a href="{{ url_for('agent_add_client') }}" class="btn btn-sm btn-chi rounded-pill px-3">
+  <i class="fas fa-plus me-1"></i><span class="d-none d-sm-inline">Νέος </span>Πελάτης
+</a>
+{% endblock %}
+
+{% block content %}
+<!-- KPI Grid -->
+<div class="kpi-grid">
+  <div class="kpi-card">
+    <div class="kpi-icon">👥</div>
+    <div class="kpi-value">{{ stats.total_clients }}</div>
+    <div class="kpi-label">Πελάτες</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon">📋</div>
+    <div class="kpi-value">{{ stats.active_policies }}</div>
+    <div class="kpi-label">Ενεργά Συμβόλαια</div>
+  </div>
+  <div class="kpi-card kpi-gold">
+    <div class="kpi-icon">💰</div>
+    <div class="kpi-value">€{{ "{:,.0f}".format(stats.total_premium) }}</div>
+    <div class="kpi-label">Συνολικά Ασφάλιστρα</div>
+  </div>
+  <div class="kpi-card kpi-green">
+    <div class="kpi-icon">📈</div>
+    <div class="kpi-value">€{{ "{:,.0f}".format(stats.total_commission) }}</div>
+    <div class="kpi-label">Προμήθειες (εκτίμηση)</div>
+  </div>
+  <div class="kpi-card {% if stats.expiring_7 > 0 %}kpi-red{% endif %}">
+    <div class="kpi-icon">⚠️</div>
+    <div class="kpi-value">{{ stats.expiring_7 }}</div>
+    <div class="kpi-label">Λήγουν (7 ημέρες)</div>
+  </div>
+  <div class="kpi-card">
+    <div class="kpi-icon">🔔</div>
+    <div class="kpi-value">{{ stats.expiring_30 }}</div>
+    <div class="kpi-label">Λήγουν (30 ημέρες)</div>
+  </div>
+  <div class="kpi-card {% if stats.overdue_payments > 0 %}kpi-red{% endif %}">
+    <div class="kpi-icon">💳</div>
+    <div class="kpi-value">{{ stats.overdue_payments }}</div>
+    <div class="kpi-label">Ληξιπρόθεσμες</div>
+  </div>
+  <div class="kpi-card {% if stats.open_tickets > 0 %}kpi-gold{% endif %}">
+    <div class="kpi-icon">🎫</div>
+    <div class="kpi-value">{{ stats.open_tickets }}</div>
+    <div class="kpi-label">Ανοιχτά Tickets</div>
+  </div>
+</div>
+
+<div class="row g-4">
+  <!-- Urgent Renewals -->
+  <div class="col-lg-7">
+    <div class="chi-card">
+      <div class="chi-card-header">
+        <i class="fas fa-exclamation-circle me-2" style="color:#DC2626"></i>
+        Επείγουσες Ανανεώσεις (7 ημέρες)
+        <a href="{{ url_for('agent_renewals') }}" class="float-end text-decoration-none" style="font-size:11px;color:#2E4BA3">Όλες →</a>
+      </div>
+      {% if urgent %}
+      <table class="chi-table">
+        <thead>
+          <tr><th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Ασφαλιστής</th><th>Λήξη</th><th>Ημέρες</th><th></th></tr>
+        </thead>
+        <tbody>
+          {% for r in urgent %}
+          <tr>
+            <td><a href="{{ url_for('agent_client_detail', client_id=r.client_id) }}" class="text-decoration-none fw-semibold" style="color:#1B2B5E">{{ r.client }}</a></td>
+            <td style="font-size:12.5px">{{ r.policy_type }}</td>
+            <td style="font-size:12px;color:#64748B">{{ r.provider }}</td>
+            <td style="font-size:12px">{{ r.expires }}</td>
+            <td><span class="status-badge {% if r.days_left <= 3 %}badge-overdue{% else %}badge-pending{% endif %}">{{ r.days_left }}d</span></td>
+            <td><a href="{{ url_for('agent_renewals') }}?policy={{ r.policy_id }}" class="btn btn-sm btn-gold py-0 px-2" style="font-size:11px">Αποστολή</a></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      {% else %}
+      <div class="text-center py-4" style="color:#64748B;font-size:13px">
+        <i class="fas fa-check-circle fa-2x mb-2 d-block" style="color:#16A34A"></i>
+        Δεν υπάρχουν επείγουσες ανανεώσεις
+      </div>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Quick Actions + Recent -->
+  <div class="col-lg-5">
+    <!-- HAL Quick Chat -->
+    <div class="hal-panel mb-4">
+      <div class="hal-title"><i class="fas fa-robot me-2"></i>HAL — Quick Ask</div>
+      <div id="hal-quick-output" class="hal-output" style="min-height:60px;font-size:12.5px">
+        Γράψε ερώτηση για τον HAL...
+      </div>
+      <div class="d-flex gap-2 mt-10" style="margin-top:12px">
+        <input type="text" id="hal-quick-input" class="form-control form-control-sm"
+          style="background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.2);color:white;border-radius:8px"
+          placeholder="π.χ. Ποιοι πελάτες έχουν τα υψηλότερα ασφάλιστρα;">
+        <button onclick="halQuickChat()" class="btn btn-sm btn-gold px-3">
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>
+
+    <!-- Recent Clients -->
+    <div class="chi-card">
+      <div class="chi-card-header"><i class="fas fa-clock me-2"></i>Πρόσφατοι Πελάτες</div>
+      {% for c in recent_clients %}
+      <div class="d-flex align-items-center justify-content-between py-2" style="border-bottom:1px solid #F1F5F9">
+        <div>
+          <a href="{{ url_for('agent_client_detail', client_id=c.id) }}" class="text-decoration-none fw-semibold" style="color:#1B2B5E;font-size:13.5px">{{ c.name }}</a>
+          {% if c.vip %}<span class="status-badge badge-vip ms-1">VIP</span>{% endif %}
+          <div style="font-size:11.5px;color:#94A3B8">{{ c.email or '—' }}</div>
+        </div>
+        <a href="{{ url_for('agent_client_detail', client_id=c.id) }}" class="btn btn-sm" style="background:#F4F6FB;border:1px solid #E2E8F0;font-size:11px;border-radius:6px">→</a>
+      </div>
+      {% endfor %}
+      <div class="text-center mt-3">
+        <a href="{{ url_for('agent_clients') }}" class="btn btn-sm btn-chi rounded-pill px-4">Όλοι οι Πελάτες</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const halMessages = [];
+async function halQuickChat() {
+  const inp = document.getElementById('hal-quick-input');
+  const out = document.getElementById('hal-quick-output');
+  const q = inp.value.trim();
+  if (!q) return;
+  halMessages.push({role:'user', content:q});
+  out.textContent = '⏳ HAL σκέφτεται...';
+  inp.value = '';
+  const r = await fetch('{{ url_for("agent_hal_chat") }}', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({messages: halMessages})
+  });
+  const d = await r.json();
+  halMessages.push({role:'assistant', content:d.response});
+  out.textContent = d.response;
+}
+document.getElementById('hal-quick-input').addEventListener('keydown', e => {
+  if (e.key==='Enter') halQuickChat();
+});
+</script>
+{% endblock %}
