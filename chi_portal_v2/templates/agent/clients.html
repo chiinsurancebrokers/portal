@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+{% block title %}Πελάτες — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-users me-1" style="color:#C9A96E"></i>Πελάτες{% endblock %}
+{% block topbar_actions %}
+<form method="POST" action="{{ url_for('agent_fix_import_data') }}" style="display:inline">
+  <button type="submit" class="btn btn-sm btn-gold rounded-pill px-3 me-2" 
+    onclick="return confirm('Διόρθωση κλάδων και agent codes σε όλα τα συμβόλαια;')"
+    title="Διορθώνει agent 1032→ca, 1868→3p και κλάδους από τα ονόματα">
+    <i class="fas fa-tools me-1"></i>Διόρθωση Data
+  </button>
+</form>
+<a href="{{ url_for('agent_add_client') }}" class="btn btn-sm btn-chi rounded-pill px-3"><i class="fas fa-plus me-1"></i>Νέος Πελάτης</a>
+{% endblock %}
+{% block content %}
+
+<!-- Filters -->
+<div class="chi-card mb-3">
+  <form method="GET" class="row g-2 align-items-end">
+    <div class="col-md-3">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Αναζήτηση</label>
+      <input type="search" name="q" value="{{ search }}" class="form-control form-control-sm" placeholder="Όνομα, email, ΑΦΜ...">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Κλάδος</label>
+      <select name="sector" class="form-select form-select-sm">
+        <option value="">Όλοι</option>
+        {% for s in sectors %}
+        <option value="{{ s.name }}" {% if sector_f==s.name %}selected{% endif %}>{{ s.value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Ασφαλιστική</label>
+      <select name="provider" class="form-select form-select-sm">
+        <option value="">Όλες</option>
+        {% for p in all_providers %}
+        <option value="{{ p }}" {% if provider_f==p %}selected{% endif %}>{{ p[:25] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Μήνας Λήξης</label>
+      <select name="month" class="form-select form-select-sm">
+        <option value="">Όλοι</option>
+        {% for m_num in months %}
+        <option value="{{ m_num }}" {% if month_f==m_num|string %}selected{% endif %}>{{ month_names[m_num] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Έτος</label>
+      <select name="year" class="form-select form-select-sm">
+        <option value="">Όλα</option>
+        {% for y in years %}
+        <option value="{{ y }}" {% if year_f==y|string %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Συνεργάτης</label>
+      <select name="agent" class="form-select form-select-sm">
+        <option value="">Όλοι</option>
+        {% for a in all_agents %}
+        <option value="{{ a }}" {% if agent_f==a %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1 d-flex gap-1">
+      <button type="submit" class="btn btn-sm btn-chi w-100" style="border-radius:6px">Φίλτρο</button>
+    </div>
+    {% if search or sector_f or provider_f or month_f or year_f or agent_f %}
+    <div class="col-12">
+      <a href="{{ url_for('agent_clients') }}" class="btn btn-sm" style="border:1px solid #E2E8F0;border-radius:6px;font-size:11px">✕ Καθαρισμός φίλτρων</a>
+      <span style="font-size:12px;color:#64748B;margin-left:8px">{{ clients|length }} αποτελέσματα</span>
+    </div>
+    {% endif %}
+  </form>
+</div>
+
+<!-- Summary stats when filtered -->
+{% if sector_f or provider_f or month_f or year_f or agent_f %}
+<div class="row g-3 mb-3">
+  <div class="col-sm-3"><div class="chi-card text-center py-2">
+    <div style="font-size:22px;font-weight:800;color:#1B2B5E">{{ clients|length }}</div>
+    <div style="font-size:11px;color:#64748B">Πελάτες</div>
+  </div></div>
+  <div class="col-sm-3"><div class="chi-card text-center py-2">
+    <div style="font-size:22px;font-weight:800;color:#C9A96E">€{{ "{:,.0f}".format(clients|sum(attribute='total_premium')) }}</div>
+    <div style="font-size:11px;color:#64748B">Συνολικά Ασφάλιστρα</div>
+  </div></div>
+  <div class="col-sm-3"><div class="chi-card text-center py-2">
+    <div style="font-size:22px;font-weight:800;color:#16A34A">€{{ "{:,.0f}".format(clients|sum(attribute='commission')) }}</div>
+    <div style="font-size:11px;color:#64748B">Συνολικές Προμήθειες</div>
+  </div></div>
+  <div class="col-sm-3"><div class="chi-card text-center py-2">
+    <div style="font-size:22px;font-weight:800;color:#1B2B5E">{{ clients|sum(attribute='active_policies') }}</div>
+    <div style="font-size:11px;color:#64748B">Ενεργά Συμβόλαια</div>
+  </div></div>
+</div>
+{% endif %}
+
+<div class="chi-card">
+  <div class="table-responsive">
+    <table class="chi-table">
+      <thead>
+        <tr><th>Πελάτης</th><th>Επικοινωνία</th><th>Κλάδοι</th>
+          <th>Συμβόλαια</th><th>Ασφάλιστρα</th><th>Προμήθεια</th>
+          <th>Επ. Λήξη</th><th>Εκκρεμείς</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for c in clients %}
+        <tr>
+          <td>
+            <a href="{{ url_for('agent_client_detail', client_id=c.id) }}" class="text-decoration-none fw-semibold" style="color:#1B2B5E">{{ c.name }}</a>
+            <div class="d-flex gap-1 mt-1">
+              {% if c.vip %}<span class="status-badge badge-vip" style="font-size:9px">VIP</span>{% endif %}
+              {% if c.portal_access %}<span class="status-badge badge-active" style="font-size:9px">Portal</span>{% endif %}
+            </div>
+          </td>
+          <td style="font-size:12px">
+            {% if c.email %}<div><i class="fas fa-envelope me-1" style="color:#94A3B8"></i>{{ c.email }}</div>{% endif %}
+            {% if c.phone %}<div><i class="fas fa-phone me-1" style="color:#94A3B8"></i>{{ c.phone }}</div>{% endif %}
+            {% if c.city %}<div><i class="fas fa-map-marker-alt me-1" style="color:#94A3B8"></i>{{ c.city }}</div>{% endif %}
+          </td>
+          <td>{% for sec in c.sectors %}<span class="status-badge" style="background:#EEF2FF;color:#3730A3;font-size:10px;margin:1px">{{ sec }}</span>{% endfor %}</td>
+          <td><span class="fw-semibold">{{ c.active_policies }}</span><span style="font-size:11px;color:#94A3B8"> / {{ c.total_policies }}</span></td>
+          <td class="fw-semibold" style="color:#1B2B5E">€{{ "{:,.0f}".format(c.total_premium) }}</td>
+          <td style="color:#16A34A;font-weight:600">€{{ "{:,.0f}".format(c.commission) }}</td>
+          <td style="font-size:12px">
+            {% if c.next_expiry %}
+            {% set days = (c.next_expiry - today).days %}
+            <span class="status-badge {% if days <= 7 %}badge-overdue{% elif days <= 30 %}badge-pending{% else %}badge-active{% endif %}">
+              {{ c.next_expiry.strftime('%d/%m/%Y') }}
+            </span>
+            {% else %}—{% endif %}
+          </td>
+          <td>{% if c.pending_payments > 0 %}<span class="status-badge badge-pending">{{ c.pending_payments }}</span>{% else %}<span style="color:#94A3B8">—</span>{% endif %}</td>
+          <td><a href="{{ url_for('agent_client_detail', client_id=c.id) }}" class="btn btn-sm btn-chi" style="font-size:11px;padding:4px 10px;border-radius:6px">→</a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center py-5" style="color:#94A3B8">
+          <i class="fas fa-search fa-2x d-block mb-2"></i>Δεν βρέθηκαν αποτελέσματα
+        </td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
