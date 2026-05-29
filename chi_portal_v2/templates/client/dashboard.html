@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Αρχική — CHI Client{% endblock %}
+{% block page_title %}Καλώς ήρθατε, {{ client.name }}{% endblock %}
+{% block content %}
+<div class="kpi-grid mb-4">
+  <div class="kpi-card">
+    <div class="kpi-icon">📋</div>
+    <div class="kpi-value">{{ policies|length }}</div>
+    <div class="kpi-label">Ενεργά Συμβόλαια</div>
+  </div>
+  {% if next_payment %}
+  <div class="kpi-card kpi-gold">
+    <div class="kpi-icon">💳</div>
+    <div class="kpi-value">€{{ "{:,.2f}".format(next_payment.amount) }}</div>
+    <div class="kpi-label">Επόμενη Πληρωμή ({{ next_payment.days }}d)</div>
+  </div>
+  {% endif %}
+  <div class="kpi-card {% if expiring %}kpi-red{% endif %}">
+    <div class="kpi-icon">⏰</div>
+    <div class="kpi-value">{{ expiring|length }}</div>
+    <div class="kpi-label">Λήγουν σε 30 ημέρες</div>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-7">
+    <!-- My Policies -->
+    <div class="chi-card">
+      <div class="chi-card-header"><i class="fas fa-file-contract me-2"></i>Τα Ασφαλιστήριά μου</div>
+      {% for p in policies %}
+      <div class="p-3 mb-2" style="background:#F8FAFC;border-radius:10px;border:1px solid #E2E8F0">
+        <div class="d-flex justify-content-between align-items-start">
+          <div>
+            <div class="fw-semibold" style="color:#1B2B5E">{{ p.policy_type }}</div>
+            <div style="font-size:12px;color:#64748B"><i class="fas fa-building me-1"></i>{{ p.provider or '—' }}
+              {% if p.policy_number %} · #{{ p.policy_number }}{% endif %}</div>
+          </div>
+          <div class="text-end">
+            <div class="fw-bold" style="color:#1B2B5E">€{{ "{:,.2f}".format(p.premium or 0) }}</div>
+            {% if p.expiration_date %}
+            {% set days = (p.expiration_date - today).days %}
+            <div class="status-badge {% if days<=30 %}badge-overdue{% else %}badge-active{% endif %}" style="font-size:10px">
+              Λήγει {{ p.expiration_date | chi_date }}
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="text-center py-4" style="color:#94A3B8">Δεν υπάρχουν ενεργά συμβόλαια</div>
+      {% endfor %}
+      <div class="text-center mt-2">
+        <a href="{{ url_for('client_policies') }}" class="btn btn-sm btn-chi rounded-pill px-4">Δείτε Όλα</a>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-5">
+    <!-- HAL Assistant teaser -->
+    <div class="hal-panel mb-3">
+      <div class="hal-title"><i class="fas fa-robot me-2"></i>HAL — Ο Ασφαλιστικός Σας Σύμβουλος</div>
+      <div style="font-size:13px;color:rgba(255,255,255,0.8);line-height:1.7">
+        Έχετε ερωτήσεις για τα ασφαλιστήριά σας;<br>
+        Ο HAL μπορεί να σας εξηγήσει τις καλύψεις, τις εξαιρέσεις, και τι να κάνετε σε περίπτωση ατυχήματος.
+      </div>
+      <a href="{{ url_for('client_hal') }}" class="btn btn-gold mt-2">
+        <i class="fas fa-comment-dots me-2"></i>Ρωτήστε τον HAL
+      </a>
+    </div>
+
+    <!-- Recent documents -->
+    <div class="chi-card">
+      <div class="chi-card-header"><i class="fas fa-folder me-2"></i>Έγγραφά μου</div>
+      {% for doc in documents %}
+      <div class="d-flex align-items-center justify-content-between py-2" style="border-bottom:1px solid #F1F5F9;font-size:12.5px">
+        <div><i class="fas fa-file-alt me-2" style="color:#94A3B8"></i>{{ doc.original_filename or doc.filename }}</div>
+        <a href="{{ url_for('download_document', doc_id=doc.id) }}" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #E2E8F0">⬇</a>
+      </div>
+      {% else %}<div style="color:#94A3B8;font-size:12px;text-align:center;padding:10px">Δεν υπάρχουν έγγραφα</div>{% endfor %}
+      <div class="text-center mt-2">
+        <a href="{{ url_for('client_documents') }}" class="btn btn-sm" style="border:1px solid #E2E8F0;font-size:12px;border-radius:20px">Διαχείριση Εγγράφων</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% if expiring %}
+<div class="chi-card mt-3" style="border-left:4px solid #DC2626">
+  <div style="font-size:13px;font-weight:700;color:#DC2626;margin-bottom:8px"><i class="fas fa-exclamation-triangle me-2"></i>Επείγον: Λήξη Ασφαλιστηρίων</div>
+  {% for p in expiring %}
+  <div style="font-size:13px;color:#374151;padding:4px 0">
+    <strong>{{ p.policy_type }}</strong> ({{ p.provider }}) λήγει {{ p.expiration_date | chi_date }}.
+    Επικοινωνήστε μαζί μας: <a href="mailto:info@chiinsurancebrokers.com">info@chiinsurancebrokers.com</a>
+  </div>
+  {% endfor %}
+</div>
+{% endif %}
+{% endblock %}
