@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %}Προμήθειες Παρόχων — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-coins me-2" style="color:#C9A96E"></i>Κατάσταση Προμηθειών{% endblock %}
+{% block content %}
+<!-- Month/Year Filter -->
+<div class="chi-card mb-3 py-2">
+  <form method="GET" class="d-flex align-items-center gap-3 flex-wrap">
+    <span style="font-size:13px;font-weight:600;color:#1B2B5E">Περίοδος:</span>
+    <select name="month" class="form-select form-select-sm" style="width:130px">
+      {% for m_num in months %}
+      <option value="{{ m_num }}" {% if m_num==month_f %}selected{% endif %}>
+        {{ ['','Ιανουάριος','Φεβρουάριος','Μάρτιος','Απρίλιος','Μάιος','Ιούνιος','Ιούλιος','Αύγουστος','Σεπτέμβριος','Οκτώβριος','Νοέμβριος','Δεκέμβριος'][m_num] }}
+      </option>
+      {% endfor %}
+    </select>
+    <select name="year" class="form-select form-select-sm" style="width:90px">
+      {% for y in years %}<option value="{{ y }}" {% if y==year_f %}selected{% endif %}>{{ y }}</option>{% endfor %}
+    </select>
+    <button type="submit" class="btn btn-sm btn-chi px-3" style="border-radius:8px">Φίλτρο</button>
+    <div class="ms-auto d-flex gap-3" style="font-size:13px">
+      <span>Σύνολο: <strong>€{{ "{:,.2f}".format(total_due) }}</strong></span>
+      <span style="color:#16A34A">Πληρωμένο: <strong>€{{ "{:,.2f}".format(total_paid) }}</strong></span>
+      <span style="color:#DC2626">Εκκρεμεί: <strong>€{{ "{:,.2f}".format(total_due - total_paid) }}</strong></span>
+    </div>
+  </form>
+</div>
+
+<div class="row g-3">
+  <div class="col-lg-8">
+    <div class="chi-card">
+      <div class="chi-card-header">
+        <i class="fas fa-list me-2"></i>Καταστάσεις {{ month_f }}/{{ year_f }}
+        <button onclick="halAnalysis()" class="btn btn-sm btn-gold float-end" style="font-size:11px;padding:3px 10px">
+          <i class="fas fa-robot me-1"></i>HAL Ανάλυση
+        </button>
+      </div>
+      <table class="chi-table">
+        <thead><tr><th>Πάροχος</th><th>Ασφάλιστρα</th><th>Συντ. %</th><th>Προμήθεια</th><th>Κατάσταση</th><th></th></tr></thead>
+        <tbody>
+          {% for s in statements %}
+          
+          <tr>
+            <td class="fw-semibold">{{ s.provider_name }}</td>
+            <td>€{{ "{:,.2f}".format(s.total_premium or 0) }}</td>
+            <td>{{ s.commission_rate or 0 }}%</td>
+            <td style="color:#16A34A;font-weight:700">€{{ "{:,.2f}".format(s.commission_amount or 0) }}</td>
+            <td>
+              {% if s.paid %}
+              <span class="status-badge badge-active" style="font-size:10px">✓ Εισπράχθηκε {{ s.paid_date or '' }}</span>
+              {% else %}
+              <span class="status-badge badge-pending" style="font-size:10px">Εκκρεμεί</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if not s.paid %}
+              <form method="POST" action="{{ url_for('backoffice_mark_paid', stmt_id=s.id) }}">
+                <button type="submit" class="btn btn-sm btn-gold" style="font-size:11px;padding:3px 10px">✓ Εισπράχθηκε</button>
+              </form>
+              {% endif %}
+            </td>
+          </tr>
+          {% else %}
+          <tr><td colspan="6" class="text-center py-4" style="color:#94A3B8">Δεν υπάρχουν καταστάσεις για αυτή την περίοδο</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+      <!-- HAL analysis output -->
+      <div id="hal-comm-output" class="hal-panel mt-3" style="display:none;padding:14px 18px">
+        <div class="hal-title"><i class="fas fa-robot me-2"></i>HAL — Ανάλυση Προμηθειών</div>
+        <div class="hal-output" id="hal-comm-text" style="font-size:12.5px"></div>
+      </div>
+    </div>
+  </div>
+  <div class="col-lg-4">
+    <!-- Add new statement -->
+    <div class="chi-card">
+      <div class="chi-card-header"><i class="fas fa-plus me-2"></i>Νέα Κατάσταση</div>
+      <form method="POST" action="{{ url_for('backoffice_add_commission') }}">
+        <div class="mb-2">
+          <label class="form-label fw-semibold" style="font-size:12px">Πάροχος</label>
+          <select name="provider_id" class="form-select form-select-sm" required>
+            {% for p in providers %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}
+          </select>
+        </div>
+        <div class="row g-2 mb-2">
+          <div class="col-6">
+            <label class="form-label fw-semibold" style="font-size:12px">Μήνας</label>
+            <select name="period_month" class="form-select form-select-sm">
+              {% for m_num in months %}<option value="{{ m_num }}" {% if m_num==month_f %}selected{% endif %}>{{ m_num }}</option>{% endfor %}
+            </select>
+          </div>
+          <div class="col-6">
+            <label class="form-label fw-semibold" style="font-size:12px">Έτος</label>
+            <select name="period_year" class="form-select form-select-sm">
+              {% for y in years %}<option value="{{ y }}" {% if y==year_f %}selected{% endif %}>{{ y }}</option>{% endfor %}
+            </select>
+          </div>
+        </div>
+        <div class="mb-2"><label class="form-label fw-semibold" style="font-size:12px">Συνολικά Ασφάλιστρα (€)</label><input type="number" name="total_premium" class="form-control form-control-sm" step="0.01"></div>
+        <div class="mb-2"><label class="form-label fw-semibold" style="font-size:12px">Συντελεστής (%)</label><input type="number" name="commission_rate" class="form-control form-control-sm" step="0.01"></div>
+        <div class="mb-2"><label class="form-label fw-semibold" style="font-size:12px">Ποσό Προμήθειας (€)</label><input type="number" name="commission_amount" class="form-control form-control-sm" step="0.01" required></div>
+        <div class="mb-2"><label class="form-label fw-semibold" style="font-size:12px">Σημειώσεις</label><input type="text" name="notes" class="form-control form-control-sm"></div>
+        <div class="form-check mb-2"><input class="form-check-input" type="checkbox" name="paid" id="paid"><label class="form-check-label" for="paid" style="font-size:12px">Ήδη εισπράχθηκε</label></div>
+        <button type="submit" class="btn btn-chi w-100 btn-sm">Καταχώρηση</button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+async function halAnalysis() {
+  const out = document.getElementById('hal-comm-output');
+  const txt = document.getElementById('hal-comm-text');
+  out.style.display = 'block';
+  txt.textContent = '⏳ HAL αναλύει...';
+  const fd = new FormData();
+  fd.append('month', {{ month_f }});
+  fd.append('year', {{ year_f }});
+  const r = await fetch('{{ url_for("backoffice_commission_hal") }}', {method:'POST', body:fd});
+  const d = await r.json();
+  txt.textContent = d.analysis;
+}
+</script>
+{% endblock %}

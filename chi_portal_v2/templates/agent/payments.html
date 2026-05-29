@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}Πληρωμές — CHI{% endblock %}
+{% block page_title %}<i class="fas fa-credit-card me-2" style="color:#C9A96E"></i>Πληρωμές{% endblock %}
+{% block content %}
+
+<div class="d-flex gap-2 mb-3 flex-wrap">
+  {% for s, label in [('all','Όλες'),('pending','Εκκρεμείς'),('paid','Πληρωμένες'),('overdue','Ληξιπρόθεσμες')] %}
+  <a href="?status={{ s }}" class="btn btn-sm" style="{% if status_f==s %}background:#1B2B5E;color:white;{% else %}border:1px solid #E2E8F0;{% endif %}border-radius:20px;font-size:12px">{{ label }}</a>
+  {% endfor %}
+  <span class="ms-auto" style="font-size:12px;color:#64748B;align-self:center">{{ payments|length }} εγγραφές</span>
+</div>
+
+<div class="chi-card">
+  <div class="table-responsive">
+    <table class="chi-table">
+      <thead>
+        <tr>
+          <th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Πάροχος</th>
+          <th>Κλάδος</th><th>Agent</th><th>Ποσό</th>
+          <th>Λήξη</th><th>Κατάσταση</th><th>Ενέργειες</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for r in payments %}
+        <tr>
+          <td>
+            {% if r.client_id %}
+            <a href="{{ url_for('agent_client_detail', client_id=r.client_id) }}" class="text-decoration-none fw-semibold" style="color:#1B2B5E">{{ r.client_name }}</a>
+            {% if r.client_email %}<div style="font-size:11px;color:#94A3B8">{{ r.client_email }}</div>{% endif %}
+            {% else %}<span style="color:#94A3B8">—</span>{% endif %}
+          </td>
+          <td style="font-size:12.5px">
+            <div>{{ r.pol_type }}</div>
+            {% if r.pol_number %}<div style="font-size:11px;color:#94A3B8">#{{ r.pol_number }}</div>{% endif %}
+            {% if r.pol_rf %}<div style="font-size:11px;color:#1B2B5E;font-family:monospace">RF: {{ r.pol_rf }}</div>{% endif %}
+          </td>
+          <td style="font-size:12px;color:#64748B">{{ r.pol_provider }}</td>
+          <td><span class="status-badge" style="background:#EEF2FF;color:#3730A3;font-size:10px">{{ r.pol_sector }}</span></td>
+          <td style="font-size:12px;color:#94A3B8">{{ r.pol_agent }}</td>
+          <td class="fw-bold" style="color:#1B2B5E;font-size:14px">€{{ "%.2f"|format(r.pay_amount) }}</td>
+          <td style="font-size:12px">{{ r.pay_due }}</td>
+          <td>
+            <span class="status-badge badge-{{ r.pay_status|lower }}">{{ r.pay_status }}</span>
+            {% if r.pay_date %}<div style="font-size:10px;color:#94A3B8">{{ r.pay_date }}</div>{% endif %}
+          </td>
+          <td>
+            <div class="d-flex gap-1 flex-wrap align-items-center">
+              <!-- Mark paid/unpaid -->
+              <form method="POST" action="{{ url_for('agent_update_payment', pay_id=r.pay_id) }}">
+                <input type="hidden" name="status" value="{{ 'PENDING' if r.pay_status=='PAID' else 'PAID' }}">
+                <button type="submit" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap">
+                  {{ '↩ Αναίρεση' if r.pay_status=='PAID' else '✓ Πληρώθηκε' }}
+                </button>
+              </form>
+              {% if r.pay_status != 'PAID' %}
+                <!-- Send notification -->
+                {% if r.client_email %}
+                <button onclick="sendNotification({{ r.pay_id }}, this)"
+                  class="btn btn-sm py-0 px-2"
+                  style="font-size:10px;background:#1B2B5E;color:#C9A96E;border:none;border-radius:5px;white-space:nowrap">
+                  <i class="fas fa-envelope me-1"></i>Ειδοποίηση
+                </button>
+                {% else %}
+                <span title="Δεν υπάρχει email — πήγαινε στον πελάτη για να προσθέσεις"
+                  style="font-size:10px;color:#CBD5E1;white-space:nowrap;cursor:help">
+                  <i class="fas fa-envelope me-1"></i>—
+                </span>
+                {% endif %}
+                <!-- Preview always visible -->
+                <a href="{{ url_for('agent_preview_payment_notification', pay_id=r.pay_id) }}"
+                  target="_blank"
+                  class="btn btn-sm py-0 px-2"
+                  style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap">
+                  👁 Preview
+                </a>
+              {% endif %}
+            </div>
+          </td>
+        </tr>
+        {% else %}
+        <tr><td colspan="9" class="text-center py-4" style="color:#94A3B8">Δεν υπάρχουν πληρωμές</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" style="display:none;position:fixed;bottom:24px;right:24px;z-index:9999;padding:14px 20px;border-radius:10px;font-size:13.5px;box-shadow:0 4px 20px rgba(0,0,0,0.2);max-width:320px;color:white"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function sendNotification(payId, btn) {
+  btn.disabled = true;
+  btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i>';
+  try {
+    const r = await fetch(`/agent/payment/${payId}/notify`, {method:'POST'});
+    const d = await r.json();
+    const toast = document.getElementById('toast');
+    if (d.success) {
+      toast.style.background = '#16A34A';
+      toast.innerHTML = '<i class="fas fa-check-circle me-2"></i>' + d.message;
+      btn.innerHTML = '✓';
+      btn.style.background = '#16A34A';
+    } else {
+      toast.style.background = '#DC2626';
+      toast.innerHTML = '<i class="fas fa-times-circle me-2"></i>' + (d.error || 'Σφάλμα');
+      btn.disabled = false;
+      btn.innerHTML = '<i class="fas fa-envelope me-1"></i>Ειδοποίηση';
+    }
+    toast.style.display = 'block';
+    setTimeout(() => toast.style.display = 'none', 4000);
+  } catch(e) {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-envelope me-1"></i>Ειδοποίηση';
+  }
+}
+</script>
+{% endblock %}
