@@ -1110,10 +1110,21 @@ def agent_delete_document(doc_id):
 @agent_required
 def agent_payments():
     db = m.get_session()
-    status_f = request.args.get("status","all")
+    status_f   = request.args.get("status","all")
+    search     = request.args.get("q", "").strip()
+    sector_f   = request.args.get("sector", "")
+    provider_f = request.args.get("provider", "")
+    agent_f    = request.args.get("agent", "")
+    month_f    = request.args.get("month", "")
+    year_f     = request.args.get("year", "")
     scope = get_agent_scope()
     try:
+        all_providers = [r[0] for r in db.query(m.Policy.provider).filter(m.Policy.provider != None).distinct().order_by(m.Policy.provider).all()]
+        all_agents    = [r[0] for r in db.query(m.Policy.agent).filter(m.Policy.agent != None).distinct().order_by(m.Policy.agent).all()]
+
         q = db.query(m.Payment).join(m.Policy).join(m.Client)
+        if scope and not agent_f:
+            agent_f = scope
         if scope:
             q = q.filter(m.Policy.agent == scope)
         if status_f != "all":
@@ -1121,7 +1132,46 @@ def agent_payments():
                 q = q.filter(m.Payment.status == m.PaymentStatus[status_f.upper()])
             except KeyError:
                 pass
-        payments = q.order_by(m.Payment.due_date.desc()).limit(200).all()
+        if search:
+            q = q.filter(
+                (m.Client.name.ilike(f"%{search}%")) |
+                (m.Client.email.ilike(f"%{search}%")) |
+                (m.Client.phone.ilike(f"%{search}%")) |
+                (m.Client.tax_id.ilike(f"%{search}%")) |
+                (m.Policy.policy_number.ilike(f"%{search}%"))
+            )
+        if sector_f:
+            try: q = q.filter(m.Policy.sector == m.PolicySector[sector_f])
+            except KeyError: pass
+        if provider_f:
+            q = q.filter(m.Policy.provider == provider_f)
+        if agent_f:
+            q = q.filter(m.Policy.agent == agent_f)
+
+        payments = q.order_by(m.Payment.due_date.desc()).all()
+
+        # Month/Year filter on the policy's expiration date — same as the
+        # equivalent filter on the Πελάτες page — applied in Python since
+        # it depends on the related Policy row, not a plain Payment column.
+        if month_f or year_f:
+            filtered = []
+            for pay in payments:
+                pol = db.query(m.Policy).get(pay.policy_id)
+                if not pol or not pol.expiration_date:
+                    continue
+                if month_f and year_f:
+                    if pol.expiration_date.month == int(month_f) and pol.expiration_date.year == int(year_f):
+                        filtered.append(pay)
+                elif month_f:
+                    if pol.expiration_date.month == int(month_f):
+                        filtered.append(pay)
+                elif year_f:
+                    if pol.expiration_date.year == int(year_f):
+                        filtered.append(pay)
+            payments = filtered
+
+        payments = payments[:200]
+
         data = []
         for pay in payments:
             pol = db.query(m.Policy).get(pay.policy_id)
@@ -1146,7 +1196,14 @@ def agent_payments():
                 "client_email": c.email if c else "",
                 "client_phone": c.phone if c else "",
             })
-        return render_template("agent/payments.html", payments=data, status_f=status_f)
+        month_names = ["","Ιαν","Φεβ","Μαρ","Απρ","Μαι","Ιουν","Ιουλ","Αυγ","Σεπ","Οκτ","Νοε","Δεκ"]
+        years = list(range(date.today().year - 1, date.today().year + 3))
+        return render_template("agent/payments.html", payments=data, status_f=status_f,
+                               search=search, sector_f=sector_f, provider_f=provider_f,
+                               agent_f=agent_f, month_f=month_f, year_f=year_f,
+                               sectors=m.PolicySector, all_providers=all_providers,
+                               all_agents=all_agents, month_names=month_names,
+                               months=range(1,13), years=years)
     finally:
         db.close()
 
