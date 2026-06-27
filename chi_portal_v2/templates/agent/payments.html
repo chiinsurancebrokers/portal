@@ -3,9 +3,73 @@
 {% block page_title %}<i class="fas fa-credit-card me-2" style="color:#C9A96E"></i>Πληρωμές{% endblock %}
 {% block content %}
 
+<!-- Filters -->
+<div class="chi-card mb-3">
+  <form method="GET" class="row g-2 align-items-end">
+    <input type="hidden" name="status" value="{{ status_f }}">
+    <div class="col-md-3">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Αναζήτηση</label>
+      <input type="search" name="q" value="{{ search }}" class="form-control form-control-sm" placeholder="Όνομα, email, ΑΦΜ, αρ. συμβολαίου...">
+    </div>
+    <div class="col-md-2">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Κλάδος</label>
+      <select name="sector" class="form-select form-select-sm">
+        <option value="">Όλοι</option>
+        {% for s in sectors %}
+        <option value="{{ s.name }}" {% if sector_f==s.name %}selected{% endif %}>{{ s.value }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Ασφαλιστική</label>
+      <select name="provider" class="form-select form-select-sm">
+        <option value="">Όλες</option>
+        {% for p in all_providers %}
+        <option value="{{ p }}" {% if provider_f==p %}selected{% endif %}>{{ p[:25] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-2">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Μήνας Λήξης</label>
+      <select name="month" class="form-select form-select-sm">
+        <option value="">Όλοι</option>
+        {% for m_num in months %}
+        <option value="{{ m_num }}" {% if month_f==m_num|string %}selected{% endif %}>{{ month_names[m_num] }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Έτος</label>
+      <select name="year" class="form-select form-select-sm">
+        <option value="">Όλα</option>
+        {% for y in years %}
+        <option value="{{ y }}" {% if year_f==y|string %}selected{% endif %}>{{ y }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1">
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Συνεργάτης</label>
+      <select name="agent" class="form-select form-select-sm">
+        <option value="">Όλοι</option>
+        {% for a in all_agents %}
+        <option value="{{ a }}" {% if agent_f==a %}selected{% endif %}>{{ a }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div class="col-md-1 d-flex gap-1">
+      <button type="submit" class="btn btn-sm btn-chi w-100" style="border-radius:6px">Φίλτρο</button>
+    </div>
+    {% if search or sector_f or provider_f or month_f or year_f or agent_f %}
+    <div class="col-12">
+      <a href="{{ url_for('agent_payments', status=status_f) }}" class="btn btn-sm" style="border:1px solid #E2E8F0;border-radius:6px;font-size:11px">✕ Καθαρισμός φίλτρων</a>
+    </div>
+    {% endif %}
+  </form>
+</div>
+
 <div class="d-flex gap-2 mb-3 flex-wrap">
   {% for s, label in [('all','Όλες'),('pending','Εκκρεμείς'),('paid','Πληρωμένες'),('overdue','Ληξιπρόθεσμες')] %}
-  <a href="?status={{ s }}" class="btn btn-sm" style="{% if status_f==s %}background:#1B2B5E;color:white;{% else %}border:1px solid #E2E8F0;{% endif %}border-radius:20px;font-size:12px">{{ label }}</a>
+  <a href="{{ url_for('agent_payments', status=s, q=search, sector=sector_f, provider=provider_f, agent=agent_f, month=month_f, year=year_f) }}" class="btn btn-sm" style="{% if status_f==s %}background:#1B2B5E;color:white;{% else %}border:1px solid #E2E8F0;{% endif %}border-radius:20px;font-size:12px">{{ label }}</a>
   {% endfor %}
   <span class="ms-auto" style="font-size:12px;color:#64748B;align-self:center">{{ payments|length }} εγγραφές</span>
 </div>
