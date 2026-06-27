@@ -3,6 +3,13 @@
 {% block page_title %}<i class="fas fa-file-import me-2" style="color:#C9A96E"></i>Import Ληξιαρίου{% endblock %}
 {% block content %}
 
+{% if errors %}
+<div class="chi-card mb-3" style="border-left:4px solid #DC2626">
+  <div style="font-weight:700;color:#DC2626;margin-bottom:8px"><i class="fas fa-exclamation-circle me-2"></i>Σφάλματα</div>
+  {% for e in errors %}<div style="font-size:13px">{{ e }}</div>{% endfor %}
+</div>
+{% endif %}
+
 {% if not preview %}
 <div class="row g-3">
   <div class="col-lg-5">
@@ -56,12 +63,6 @@
 </div>
 
 {% else %}
-{% if errors %}
-<div class="chi-card mb-3" style="border-left:4px solid #DC2626">
-  <div style="font-weight:700;color:#DC2626;margin-bottom:8px"><i class="fas fa-exclamation-circle me-2"></i>Σφάλματα</div>
-  {% for e in errors %}<div style="font-size:13px">{{ e }}</div>{% endfor %}
-</div>
-{% endif %}
 
 <div class="chi-card mb-3">
   <div class="d-flex align-items-center justify-content-between flex-wrap gap-2">
