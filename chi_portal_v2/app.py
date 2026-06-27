@@ -1985,9 +1985,11 @@ AGENT_NUMBER_MAP = {
 }
 
 def _parse_num_gr(s):
-    """Parse Greek/European number: 1.151,19 -> 1151.19"""
+    """Parse Greek/European number: 1.151,19 -> 1151.19. Strips currency
+    symbols / stray whitespace too, e.g. "37.02€" -> 37.02."""
     if not s: return 0.0
     s = str(s).strip().strip('"')
+    s = s.replace("€", "").replace("EUR", "").replace("ευρώ", "").strip()
     if not s: return 0.0
     try:
         if "," in s:
@@ -2014,10 +2016,58 @@ def _get_sector(raw):
             return v
     return m.PolicySector.OTHER
 
+def _detect_delimiter(lines):
+    """Pick whichever of ; or , actually splits the header into >1 column."""
+    if not lines:
+        return ";"
+    header = lines[0]
+    semi_cols  = len(header.split(";"))
+    comma_cols = len(header.split(","))
+    return ";" if semi_cols >= comma_cols else ","
+
+def _looks_like_header(line, delim):
+    """A header row is mostly non-numeric, non-date text in every field."""
+    cells = [c.strip().strip('"') for c in line.split(delim)]
+    if not cells or not any(cells):
+        return False
+    numericish = 0
+    for c in cells:
+        if not c:
+            continue
+        if _parse_date_gr(c) or _re_only_digits(c):
+            numericish += 1
+    # if most non-empty cells look like dates/numbers, this is a data row, not a header
+    nonempty = [c for c in cells if c]
+    return nonempty and numericish < len(nonempty) / 2
+
+def _re_only_digits(s):
+    import re as _re
+    return bool(_re.match(r'^[\d.,€\s]+$', s))
+
+def _strip_greek_accents(s):
+    """Normalize Greek text for matching: uppercase + strip accents.
+    Python's str.upper() does NOT remove the accent on Greek capitals
+    (e.g. 'ό'.upper() == 'Ό', not 'Ο'), so a literal match against a
+    plain-letter constant like "ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ" silently fails against
+    real-world headers that came from Excel/old exports with accents
+    still in place. This collapses both forms to the same plain letters.
+    """
+    if not s:
+        return ""
+    s = s.upper()
+    table = {
+        "Ά": "Α", "Έ": "Ε", "Ή": "Η", "Ί": "Ι", "Ό": "Ο", "Ύ": "Υ", "Ώ": "Ω",
+        "Ϊ": "Ι", "Ϋ": "Υ",
+    }
+    return "".join(table.get(ch, ch) for ch in s)
+
 def _parse_lixiario_csv(file_bytes):
-    """Auto-detect and parse both CSV formats from the portal system.
-    Format A - Ληξιάρια: Έναρξη;Λήξη;Εταιρεία;Κλάδος;Συμβόλαιο;...;Πελάτης;ΑΦΜ;...
-    Format B - Παραγωγή: Χαρακτ/κό;Πελάτης;Συμβόλαιο;...;Κλάδος;Εταιρεία;Έκδοση;Έναρξη;Λήξη;Μικτά;...
+    """Auto-detect and parse CSV formats from the portal system / old exports.
+    Format A - Ληξιάρια:  Έναρξη;Λήξη;Εταιρεία;Κλάδος;Συμβόλαιο;...;Πελάτης;ΑΦΜ;...
+    Format B - Παραγωγή:  Χαρακτ/κό;Πελάτης;Συμβόλαιο;...;Κλάδος;Εταιρεία;Έκδοση;Έναρξη;Λήξη;Μικτά;...
+    Format C - Ανανεώσεις: Συμβόλαιο,Χαρακτηριστικό,Πελάτης,Κλάδος,Εταιρεία,Έναρξη,Λήξη,Μικτά,Τηλέφωνο,Κινητό
+    Delimiter (";" or ",") and number of header rows (1 or 2) are both
+    auto-detected rather than assumed, since different exports vary.
     """
     for enc in ("iso-8859-7", "utf-8", "iso-8859-1", "cp1253"):
         try: text = file_bytes.decode(enc, errors="strict"); break
@@ -2027,17 +2077,64 @@ def _parse_lixiario_csv(file_bytes):
     lines = text.splitlines()
     if not lines: return []
 
-    title = lines[0].split(";")[0].strip().strip('"') if lines else ""
+    delim = _detect_delimiter(lines)
+    title = lines[0].split(delim)[0].strip().strip('"') if lines else ""
+    header_row = lines[0]
+    header_norm = _strip_greek_accents(header_row)
+    title_norm = _strip_greek_accents(title)
     rows  = []
+
+    # Decide how many leading rows are headers/titles (1 or 2) instead of
+    # always assuming a title row + a header row.
+    data_start = 1
+    if len(lines) > 1 and _looks_like_header(lines[1], delim):
+        data_start = 2
+
+    if any(h in header_norm for h in ("ΣΥΜΒΟΛΑΙΟ,ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ", "ΣΥΜΒΟΛΑΙΟ;ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ")) or \
+       (delim == "," and "ΣΥΜΒΟΛΑΙΟ" in header_norm and "ΠΕΛΑΤΗΣ" in header_norm and "ΑΦΜ" not in header_norm):
+        # ── FORMAT C: ΑΝΑΝΕΩΣΕΙΣ (renewals export) ──────────────────
+        # Cols: 0=Συμβόλαιο 1=Χαρακτηριστικό 2=Πελάτης 3=Κλάδος 4=Εταιρεία
+        #       5=Έναρξη 6=Λήξη 7=Μικτά 8=Τηλέφωνο 9=Κινητό
+        for line in lines[data_start:]:
+            if not line.strip(): continue
+            p = [x.strip().strip('"') for x in line.split(delim)]
+            if len(p) < 7: continue
+            expiry = _parse_date_gr(p[6]) if len(p) > 6 else None
+            start  = _parse_date_gr(p[5]) if len(p) > 5 else None
+            if not expiry: continue
+            client_name = p[2].strip() if len(p) > 2 else ""
+            if not client_name: continue
+            sector_raw = p[3].strip() if len(p) > 3 else ""
+            rows.append({
+                "client_name":   client_name,
+                "tax_id":        "",
+                "phone":         p[8].strip() if len(p) > 8 else "",
+                "mobile":        p[9].strip() if len(p) > 9 else "",
+                "policy_number": p[0].strip() if len(p) > 0 else "",
+                "receipt":       "",
+                "kind":          "",
+                "sector_raw":    sector_raw,
+                "sector":        _get_sector(sector_raw).name,
+                "provider":      p[4].strip() if len(p) > 4 else "",
+                "license_plate": p[1].strip() if len(p) > 1 else "",
+                "start_date":    str(start)  if start  else None,
+                "expiry_date":   str(expiry) if expiry else None,
+                "premium_gross": _parse_num_gr(p[7]) if len(p) > 7 else 0.0,
+                "premium_net":   0.0,
+                "commission":    0.0,
+                "agent_code":    "",
+                "csv_format":    "ananeoseis",
+            })
+        return rows
 
     if any(w in title for w in ("Παραγωγή","Παραγωγη","Paragogi")):
         # ── FORMAT B: ΠΑΡΑΓΩΓΗ ───────────────────────────────────────
         # Cols: 0=Χαρακτ/κό 1=Πελάτης 2=Συμβόλαιο 3=Απόδειξη
         #       4=Κατηγορία 5=Κλάδος 6=Εταιρεία 7=Έκδοση
         #       8=Έναρξη 9=Λήξη 10=Μικτά 11=Καθαρά 12=Εξ.Προμήθεια 13=Υπόλ.
-        for line in lines[2:]:
+        for line in lines[data_start:]:
             if not line.strip(): continue
-            p = [x.strip().strip('"') for x in line.split(";")]
+            p = [x.strip().strip('"') for x in line.split(delim)]
             if len(p) < 10: continue
             client_name = p[1].strip() if len(p) > 1 else ""
             if not client_name: continue
@@ -2075,9 +2172,9 @@ def _parse_lixiario_csv(file_bytes):
         # Cols: 0=Έναρξη 1=Λήξη 2=Εταιρεία 3=Κλάδος 4=Συμβόλαιο
         #       5=Απόδειξη 6=Είδος 7=Χαρακτ/κό 8=Πελάτης 9=ΑΦΜ
         #       10=Τηλέφωνο 11=Κινητό 12=Συνεργάτης 13=Ημ.Εκτύπ. 14=Μικτά 15=Καθαρά
-        for line in lines[2:]:
+        for line in lines[data_start:]:
             if not line.strip(): continue
-            p = [x.strip().strip('"') for x in line.split(";")]
+            p = [x.strip().strip('"') for x in line.split(delim)]
             if len(p) < 14: continue
             expiry = _parse_date_gr(p[1])
             start  = _parse_date_gr(p[0])
@@ -2120,11 +2217,15 @@ def agent_import():
     if action == "preview":
         all_rows = []
         errors = []
+        files_seen = 0
         for field in ["file1","file2","file3"]:
             f = request.files.get(field)
             if f and f.filename:
+                files_seen += 1
                 try:
                     rows = _parse_lixiario_csv(f.read())
+                    if not rows:
+                        errors.append(f"{f.filename}: δεν βρέθηκαν έγκυρες εγγραφές — ελέγξτε ότι η μορφή του αρχείου ταιριάζει με μία από τις υποστηριζόμενες (διαχωριστικό ; ή , και σωστές στήλες).")
                     agent_code = request.form.get(f"agent_{field}", "chi")
                     for r in rows:
                         if not r["agent_code"]:
@@ -2133,6 +2234,12 @@ def agent_import():
                 except Exception as e:
                     errors.append(f"{f.filename}: {e}")
         db.close()
+        if files_seen == 0:
+            errors.append("Δεν επιλέχθηκε κανένα αρχείο. Επιλέξτε τουλάχιστον ένα αρχείο CSV πριν πατήσετε «Προεπισκόπηση».")
+        if not all_rows:
+            # Nothing parsed — re-show the upload form but WITH the errors
+            # visible, instead of silently looking like nothing happened.
+            return render_template("agent/import.html", preview=None, errors=errors)
         return render_template("agent/import.html", preview=all_rows, errors=errors)
 
     elif action == "confirm":
@@ -2556,7 +2663,7 @@ def agent_send_payment_notification(pay_id):
         if ok:
             # Log in email queue
             eq = m.EmailQueue(
-                client_id=pay_id, policy_id=pay_id, payment_id=pay_id,
+                client_id=client.id, policy_id=policy.id, payment_id=pay_id,
                 recipient_email=client_email, subject=subject, body_html=body_html,
                 status=m.EmailStatus.SENT, sent_at=datetime.now()
             )
