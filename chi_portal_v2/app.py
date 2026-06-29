@@ -2674,10 +2674,11 @@ def _build_payment_email_html(client, policy, payment, bank_info, show_banks: bo
 
     sector_name  = _g(policy, "sector") or (_g(policy, "sector_name") if isinstance(policy, dict) else "")
     expiry_raw   = _g(policy, "expiration_date")
-    # Payment due date = START date of policy (ημερομηνία έναρξης), fallback to payment due_date
-    start_raw    = _g(policy, "start_date")
+    # Καταληκτική ημερομηνία πληρωμής = η due_date της συγκεκριμένης δόσης (Payment),
+    # με fallback στην ημερομηνία έναρξης συμβολαίου μόνο αν λείπει η due_date.
     pay_due_raw  = _g(payment, "due_date")
-    due_raw      = start_raw if start_raw else pay_due_raw
+    start_raw    = _g(policy, "start_date")
+    due_raw      = pay_due_raw if pay_due_raw else start_raw
     expiry_str   = chi_date_filter(expiry_raw) if expiry_raw else "—"
     due_str      = chi_date_filter(due_raw) if due_raw else "—"
     policy_type  = _g(policy, "policy_type")
