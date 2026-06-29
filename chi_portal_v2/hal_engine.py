@@ -73,7 +73,7 @@ def draft_renewal_email(client_data: dict, policy_data: dict, days_left: int) ->
 Το email πρέπει:
 - Να είναι ζεστό αλλά επαγγελματικό
 - Να τονίζει τη σημασία της ανανέωσης
-- Να αναφέρει επικοινωνία: 210-XXXXXXX | info@chiinsurancebrokers.com
+- Να αναφέρει επικοινωνία: 6975900189 (Χρήστος Ιατρόπουλος) | info@chiinsurancebrokers.com
 - HTML format με καλή μορφοποίηση
 
 Απάντησε ΜΟΝ με JSON: {{"subject": "...", "body_html": "..."}}"""
