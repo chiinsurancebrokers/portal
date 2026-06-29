@@ -1496,11 +1496,42 @@ def client_hal():
     client = db.query(m.Client).get(client_id)
     policies = db.query(m.Policy).filter_by(client_id=client_id, status=m.PolicyStatus.ACTIVE).all()
     db.close()
-    context = f"Πελάτης: {client.name}\nΣυμβόλαια: " + ", ".join(
-        f"{p.policy_type} ({p.provider})" for p in policies) if client else ""
-    db.close()
+    context = _build_hal_context(client, policies)
     return render_template("client/hal.html", client=m.ser_client(client),
                            policies=[m.ser_policy(p) for p in policies], context=context)
+
+
+def _build_hal_context(client, policies) -> str:
+    """Build a detailed, real-data context string for HAL, one block per policy.
+    Excludes internal commission/financial fields — those are not for client eyes."""
+    if not client:
+        return ""
+    lines = [f"Πελάτης: {client.name}"]
+    if not policies:
+        lines.append("Ο πελάτης δεν έχει αυτή τη στιγμή ενεργά συμβόλαια.")
+        return "\n".join(lines)
+    lines.append(f"Έχει {len(policies)} ενεργό/ά συμβόλαιο/α:")
+    for i, p in enumerate(policies, 1):
+        d = m.ser_policy(p)
+        block = [
+            f"\n--- Συμβόλαιο {i} ---",
+            f"Τύπος: {d['policy_type']} | Τομέας: {d['sector_name']} | Πάροχος: {d['provider']}",
+            f"Αριθμός συμβολαίου: {d['policy_number'] or '—'}",
+            f"Ασφάλιστρο: €{d['premium']:.2f} | Συχνότητα πληρωμής: {d['payment_frequency'] or '—'}",
+            f"Έναρξη: {d['start_date'] or '—'} | Λήξη: {d['expiration_date'] or '—'}",
+        ]
+        if d['license_plate']:
+            block.append(f"Όχημα: {d['vehicle_make']} {d['vehicle_model']} | Πινακίδα: {d['license_plate']}")
+        if d['insured_value']:
+            block.append(f"Ασφαλιζόμενη αξία: €{d['insured_value']:.2f}")
+        if d['beneficiary']:
+            block.append(f"Δικαιούχος: {d['beneficiary']}")
+        if d['coverage_details']:
+            block.append(f"Λεπτομέρειες κάλυψης: {d['coverage_details']}")
+        if d['hal_summary']:
+            block.append(f"Σύνοψη: {d['hal_summary']}")
+        lines.extend(block)
+    return "\n".join(lines)
 
 @app.route("/client/hal/chat", methods=["POST"])
 @client_required
