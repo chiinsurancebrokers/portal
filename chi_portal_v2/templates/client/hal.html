@@ -42,7 +42,7 @@
 {% block scripts %}
 <script>
 const messages = [];
-const ctx = `{{ context|safe }}`;
+const ctx = {{ context|tojson }};
 function addMessage(role, text) {
   const div = document.getElementById('chat-messages');
   const bubble = document.createElement('div');
