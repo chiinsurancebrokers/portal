@@ -462,19 +462,158 @@ def agent_clients():
     finally:
         db.close()
 
+@app.route("/agent/clients/duplicates")
+@agent_required
+def agent_duplicate_clients():
+    """Find clients sharing the same ΑΦΜ (tax_id) — candidates for merging."""
+    from sqlalchemy import func
+    db = m.get_session()
+    try:
+        # Group by normalized (trimmed) tax_id, ignore blanks, find groups with >1 client
+        dup_tax_ids = [
+            r[0] for r in db.query(func.trim(m.Client.tax_id))
+            .filter(m.Client.tax_id != None, func.trim(m.Client.tax_id) != "")
+            .group_by(func.trim(m.Client.tax_id))
+            .having(func.count(m.Client.id) > 1)
+            .all()
+        ]
+        groups = []
+        for tax_id in dup_tax_ids:
+            clients = db.query(m.Client).filter(
+                func.trim(m.Client.tax_id) == tax_id
+            ).order_by(m.Client.id).all()
+            rows = []
+            for c in clients:
+                rows.append({
+                    "id": c.id, "name": c.name, "email": c.email, "phone": c.phone,
+                    "mobile": c.mobile, "city": c.city, "tax_id": c.tax_id,
+                    "created_date": c.created_date.strftime("%d/%m/%Y") if c.created_date else "—",
+                    "policies": db.query(m.Policy).filter_by(client_id=c.id).count(),
+                    "tickets": db.query(m.Ticket).filter_by(client_id=c.id).count(),
+                    "documents": db.query(m.Document).filter_by(client_id=c.id).count(),
+                    "has_portal": db.query(m.User).filter_by(client_id=c.id).count() > 0,
+                })
+            groups.append({"tax_id": tax_id, "clients": rows})
+        return render_template("agent/duplicate_clients.html", groups=groups)
+    finally:
+        db.close()
+
+
+@app.route("/agent/clients/merge", methods=["POST"])
+@agent_required
+def agent_merge_clients():
+    """Merge one or more duplicate client records into a single 'keeper' record.
+
+    Moves all policies, tickets, documents, email-queue entries and portal
+    user accounts from the duplicate(s) onto the keeper, then deletes the
+    duplicate client rows. Fields blank on the keeper are filled in from the
+    duplicates where available, so no information is lost.
+    """
+    keep_id = request.form.get("keep_id", type=int)
+    dup_ids = [int(x) for x in request.form.getlist("dup_ids") if x and x.isdigit()]
+    dup_ids = [d for d in dup_ids if d != keep_id]
+
+    if not keep_id or not dup_ids:
+        flash("Επιλέξτε ποια εγγραφή θα διατηρηθεί και ποιες θα ενωθούν σε αυτή.", "danger")
+        return redirect(url_for("agent_duplicate_clients"))
+
+    db = m.get_session()
+    try:
+        keeper = db.query(m.Client).get(keep_id)
+        if not keeper:
+            flash("Δεν βρέθηκε η εγγραφή προορισμού.", "danger")
+            return redirect(url_for("agent_duplicate_clients"))
+
+        moved_policies = moved_tickets = moved_documents = moved_emails = moved_users = 0
+        merged_names = []
+
+        for dup_id in dup_ids:
+            dup = db.query(m.Client).get(dup_id)
+            if not dup:
+                continue
+            merged_names.append(dup.name)
+
+            # Fill in any blank fields on the keeper from the duplicate
+            for field in ("email", "phone", "mobile", "address", "postal_code",
+                          "city", "tax_id", "id_number", "date_of_birth",
+                          "profession", "company_name"):
+                if not getattr(keeper, field) and getattr(dup, field):
+                    setattr(keeper, field, getattr(dup, field))
+            if dup.vip:
+                keeper.vip = True
+            if dup.notes:
+                keeper.notes = (keeper.notes + "\n" if keeper.notes else "") + f"[Από συγχώνευση #{dup.id}] {dup.notes}"
+
+            # Re-point every related record at the keeper
+            moved_policies  += db.query(m.Policy).filter_by(client_id=dup.id) \
+                .update({m.Policy.client_id: keeper.id}, synchronize_session=False)
+            moved_tickets   += db.query(m.Ticket).filter_by(client_id=dup.id) \
+                .update({m.Ticket.client_id: keeper.id}, synchronize_session=False)
+            moved_documents += db.query(m.Document).filter_by(client_id=dup.id) \
+                .update({m.Document.client_id: keeper.id}, synchronize_session=False)
+            moved_emails    += db.query(m.EmailQueue).filter_by(client_id=dup.id) \
+                .update({m.EmailQueue.client_id: keeper.id}, synchronize_session=False)
+
+            # Portal login accounts: only one user can own client_id at a time —
+            # if the keeper has no portal account yet, hand the duplicate's over.
+            dup_users = db.query(m.User).filter_by(client_id=dup.id).all()
+            for u in dup_users:
+                keeper_has_user = db.query(m.User).filter_by(client_id=keeper.id).first()
+                if not keeper_has_user:
+                    u.client_id = keeper.id
+                    keeper.portal_access = True
+                    moved_users += 1
+                else:
+                    # Keeper already has portal access — deactivate the orphaned login
+                    u.client_id = None
+                    u.active = False
+
+            db.delete(dup)
+
+        keeper.updated_date = datetime.now()
+        db.commit()
+        flash(
+            f"✅ Συγχωνεύθηκαν {len(merged_names)} διπλοεγγραφές ({', '.join(merged_names)}) στον πελάτη «{keeper.name}». "
+            f"Μεταφέρθηκαν: {moved_policies} συμβόλαια, {moved_tickets} tickets, "
+            f"{moved_documents} έγγραφα, {moved_emails} emails"
+            + (f", {moved_users} portal login" if moved_users else "") + ".",
+            "success"
+        )
+        return redirect(url_for("agent_client_detail", client_id=keeper.id))
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Σφάλμα κατά τη συγχώνευση: {e}", "danger")
+        return redirect(url_for("agent_duplicate_clients"))
+    finally:
+        db.close()
+
+
 @app.route("/agent/client/add", methods=["GET", "POST"])
 @agent_required
 def agent_add_client():
     if request.method == "POST":
         db = m.get_session()
         try:
+            tax_id = (request.form.get("tax_id") or "").strip()
+            # Warn (don't silently duplicate) if this ΑΦΜ already belongs to another client
+            if tax_id and not request.form.get("force_duplicate"):
+                existing = db.query(m.Client).filter(m.Client.tax_id == tax_id).first()
+                if existing:
+                    flash(
+                        f"⚠️ Υπάρχει ήδη πελάτης με ΑΦΜ {tax_id}: «{existing.name}» (#{existing.id}). "
+                        f"Πατήστε «Καταχώρηση ούτως ή άλλως» αν θέλετε να τον προσθέσετε σαν νέα εγγραφή.",
+                        "danger"
+                    )
+                    form_data = {k: request.form.get(k) for k in request.form}
+                    return render_template("agent/client_form.html", client=form_data,
+                                           action="add", duplicate_warning=existing)
             dob_str = request.form.get("date_of_birth")
             dob = datetime.strptime(dob_str, "%Y-%m-%d").date() if dob_str else None
             client = m.Client(
                 name=request.form.get("name"), email=request.form.get("email"),
                 phone=request.form.get("phone"), mobile=request.form.get("mobile"),
                 address=request.form.get("address"), postal_code=request.form.get("postal_code"),
-                city=request.form.get("city"), tax_id=request.form.get("tax_id"),
+                city=request.form.get("city"), tax_id=tax_id or None,
                 id_number=request.form.get("id_number"), date_of_birth=dob,
                 profession=request.form.get("profession"), company_name=request.form.get("company_name"),
                 notes=request.form.get("notes"), vip=bool(request.form.get("vip"))
@@ -561,6 +700,25 @@ def agent_edit_client(client_id):
         abort(404)
     if request.method == "POST":
         try:
+            tax_id = (request.form.get("tax_id") or "").strip()
+            # Warn if this ΑΦΜ is being changed to one already used by a *different* client
+            if tax_id and not request.form.get("force_duplicate"):
+                existing = db.query(m.Client).filter(
+                    m.Client.tax_id == tax_id, m.Client.id != client_id
+                ).first()
+                if existing:
+                    flash(
+                        f"⚠️ Το ΑΦΜ {tax_id} χρησιμοποιείται ήδη από τον πελάτη «{existing.name}» (#{existing.id}). "
+                        f"Μήπως πρόκειται για διπλοεγγραφή; Δείτε τη σελίδα διπλοεγγραφών για συγχώνευση, "
+                        f"ή πατήστε «Αποθήκευση ούτως ή άλλως» αν είναι σωστό.",
+                        "danger"
+                    )
+                    client_d = m.ser_client(client)
+                    client_d.update({k: request.form.get(k) for k in request.form if k != "tax_id"})
+                    client_d["tax_id"] = tax_id
+                    db.close()
+                    return render_template("agent/client_form.html", client=client_d,
+                                           action="edit", duplicate_warning=existing)
             dob_str = request.form.get("date_of_birth")
             client.name        = request.form.get("name")
             client.email       = request.form.get("email")
@@ -569,7 +727,7 @@ def agent_edit_client(client_id):
             client.address     = request.form.get("address")
             client.postal_code = request.form.get("postal_code")
             client.city        = request.form.get("city")
-            client.tax_id      = request.form.get("tax_id")
+            client.tax_id      = tax_id or None
             client.id_number   = request.form.get("id_number")
             client.date_of_birth = datetime.strptime(dob_str, "%Y-%m-%d").date() if dob_str else None
             client.profession  = request.form.get("profession")
