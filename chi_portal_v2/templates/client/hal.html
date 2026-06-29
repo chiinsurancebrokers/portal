@@ -18,7 +18,7 @@
     </div>
     <div class="chi-card mt-3">
       <div class="chi-card-header">Ερωτήσεις για τον HAL</div>
-      {% for q in ['Τι καλύπτει το ασφαλιστήριο αυτοκινήτου μου;', 'Τι κάνω σε περίπτωση ατυχήματος;', 'Πότε λήγει η ασφάλειά μου;', 'Ποιες είναι οι εξαιρέσεις;'] %}
+      {% for q in ['Τι καλύπτουν τα συμβόλαιά μου;', 'Πότε λήγει κάθε συμβόλαιό μου;', 'Ποιες είναι οι εξαιρέσεις;', 'Πώς υποβάλλω μια αξίωση;'] %}
       <button onclick="askQuestion('{{ q }}')" class="btn btn-sm w-100 text-start mb-1" style="border:1px solid #E2E8F0;font-size:12px;border-radius:6px;padding:6px 10px">{{ q }}</button>
       {% endfor %}
     </div>
@@ -28,7 +28,7 @@
       <div class="hal-title"><i class="fas fa-robot me-2"></i>HAL — AI Ασφαλιστικός Σύμβουλος</div>
       <div id="chat-messages" style="flex:1;overflow-y:auto;padding:10px 0">
         <div style="background:rgba(255,255,255,0.06);border-radius:10px;padding:14px;color:rgba(255,255,255,0.8);font-size:13px;line-height:1.7">
-          Γεια σας! Είμαι ο HAL, ο AI ασφαλιστικός σύμβουλος της CHI Insurance Brokers. Μπορώ να σας εξηγήσω τις καλύψεις των ασφαλιστηρίων σας, τι κάνετε σε περίπτωση ατυχήματος, ή οποιαδήποτε άλλη ερώτηση. Πώς μπορώ να σας βοηθήσω;
+          Γεια σας! Είμαι ο HAL, ο AI ασφαλιστικός σύμβουλος της CHI Insurance Brokers. Μπορώ να σας εξηγήσω τις καλύψεις όλων των ασφαλιστηρίων σας — αυτοκίνητο, ζωή, υγεία, περιουσία, ταξίδι, κατοικίδια ή επιχείρηση — τι κάνετε σε περίπτωση ζημιάς ή ατυχήματος, ή οποιαδήποτε άλλη ερώτηση. Πώς μπορώ να σας βοηθήσω;
         </div>
       </div>
       <div class="d-flex gap-2 mt-2">
@@ -43,6 +43,81 @@
 <script>
 const messages = [];
 const ctx = {{ context|tojson }};
+// Ασφαλής, ελάχιστος Markdown renderer: bold, headers, λίστες, αλλαγές γραμμής.
+// Φτιάχνει πάντα πραγματικά DOM nodes — ποτέ δεν περνάει κείμενο μέσα από innerHTML,
+// άρα ό,τι κείμενο επιστρέψει ο HAL (ή πληκτρολογήσει ο χρήστης) δεν εκτελείται ποτέ ως HTML/JS.
+function renderInlineBold(parent, text) {
+  // Σπάει σε κομμάτια στα **...** χωρίς να επιτρέπει raw HTML — κάθε κομμάτι μπαίνει με textContent.
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  parts.forEach(part => {
+    if (!part) return;
+    if (part.startsWith('**') && part.endsWith('**') && part.length > 4) {
+      const b = document.createElement('strong');
+      b.textContent = part.slice(2, -2);
+      parent.appendChild(b);
+    } else {
+      parent.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
+function renderMarkdown(container, text) {
+  const rawLines = String(text).split('\n');
+  let listEl = null; // τρέχουσα <ul>/<ol> που χτίζεται, αν είμαστε μέσα σε λίστα
+
+  rawLines.forEach(line => {
+    const trimmed = line.trim();
+
+    // Headers: #, ##, ###
+    const headerMatch = trimmed.match(/^(#{1,3})\s+(.*)$/);
+    if (headerMatch) {
+      listEl = null;
+      const level = headerMatch[1].length;
+      const h = document.createElement(level === 1 ? 'h6' : level === 2 ? 'h6' : 'div');
+      h.style.cssText = 'font-weight:700;margin:10px 0 4px;font-size:13.5px;color:inherit';
+      renderInlineBold(h, headerMatch[2]);
+      container.appendChild(h);
+      return;
+    }
+
+    // Λίστες: "- κάτι" ή "1. κάτι"
+    const bulletMatch = trimmed.match(/^[-•]\s+(.*)$/);
+    const numberedMatch = trimmed.match(/^\d+[.)]\s+(.*)$/);
+    if (bulletMatch || numberedMatch) {
+      const tag = numberedMatch ? 'ol' : 'ul';
+      if (!listEl || listEl.tagName.toLowerCase() !== tag) {
+        listEl = document.createElement(tag);
+        listEl.style.cssText = 'margin:4px 0 4px 18px;padding:0';
+        container.appendChild(listEl);
+      }
+      const li = document.createElement('li');
+      li.style.marginBottom = '2px';
+      renderInlineBold(li, (bulletMatch || numberedMatch)[1]);
+      listEl.appendChild(li);
+      return;
+    }
+
+    // Οριζόντια γραμμή "---"
+    if (/^-{3,}$/.test(trimmed)) {
+      listEl = null;
+      container.appendChild(document.createElement('hr'));
+      return;
+    }
+
+    // Κενή γραμμή
+    listEl = null;
+    if (trimmed === '') {
+      container.appendChild(document.createElement('br'));
+      return;
+    }
+
+    // Κανονική γραμμή κειμένου (με πιθανό **bold** μέσα της)
+    const p = document.createElement('div');
+    renderInlineBold(p, line);
+    container.appendChild(p);
+  });
+}
+
 function addMessage(role, text) {
   const div = document.getElementById('chat-messages');
   const bubble = document.createElement('div');
@@ -50,11 +125,11 @@ function addMessage(role, text) {
   const label = document.createElement('strong');
   label.textContent = (role==='user' ? 'Εσείς: ' : 'HAL: ');
   bubble.appendChild(label);
-  const lines = String(text).split('\n');
-  lines.forEach((line, i) => {
-    if (i > 0) bubble.appendChild(document.createElement('br'));
-    bubble.appendChild(document.createTextNode(line));
-  });
+  if (role === 'user') {
+    bubble.appendChild(document.createTextNode(String(text)));
+  } else {
+    renderMarkdown(bubble, text);
+  }
   div.appendChild(bubble);
   div.scrollTop = div.scrollHeight;
 }
