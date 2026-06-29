@@ -47,7 +47,14 @@ function addMessage(role, text) {
   const div = document.getElementById('chat-messages');
   const bubble = document.createElement('div');
   bubble.style.cssText = `margin:8px 0;padding:12px 14px;border-radius:10px;font-size:13.5px;line-height:1.7;${role==='user'?'background:rgba(201,169,110,0.2);text-align:right;color:rgba(255,255,255,0.9)':'background:rgba(255,255,255,0.06);color:rgba(255,255,255,0.88)'}`;
-  bubble.innerHTML = (role==='user'?'<strong>Εσείς:</strong> ':' <strong>HAL:</strong> ') + text.replace(/\n/g,'<br>');
+  const label = document.createElement('strong');
+  label.textContent = (role==='user' ? 'Εσείς: ' : 'HAL: ');
+  bubble.appendChild(label);
+  const lines = String(text).split('\n');
+  lines.forEach((line, i) => {
+    if (i > 0) bubble.appendChild(document.createElement('br'));
+    bubble.appendChild(document.createTextNode(line));
+  });
   div.appendChild(bubble);
   div.scrollTop = div.scrollHeight;
 }
