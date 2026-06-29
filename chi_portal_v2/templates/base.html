@@ -238,6 +238,8 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
     <i class="fas fa-file-import"></i><span>Import CSV</span></a>
   <a href="{{ url_for('agent_scanner') }}" class="nav-link-chi {% if request.endpoint=='agent_scanner' %}active{% endif %}" style="color:#C9A96E!important">
     <i class="fas fa-brain"></i><span>AI Scanner</span></a>
+  <a href="{{ url_for('agent_duplicate_clients') }}" class="nav-link-chi {% if request.endpoint=='agent_duplicate_clients' %}active{% endif %}">
+    <i class="fas fa-clone"></i><span>Διπλοεγγραφές</span></a>
   {% if not session.get('agent_scope') %}
   <a href="{{ url_for('admin_agents') }}" class="nav-link-chi {% if 'admin' in (request.endpoint or '') %}active{% endif %}" style="border-top:1px solid rgba(255,255,255,0.06);margin-top:4px;padding-top:12px">
     <i class="fas fa-user-tie"></i><span>Agents</span></a>
