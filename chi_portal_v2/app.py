@@ -1411,12 +1411,18 @@ def client_dashboard():
                                     "policy": p.policy_type, "days": (pay.due_date - today).days}
         # Expiring soon
         expiring = [p for p in active if p.expiration_date and (p.expiration_date - today).days <= 30]
+
+        def _ser_policy_with_days(p):
+            d = m.ser_policy(p)
+            d["days_left"] = (p.expiration_date - today).days if p.expiration_date else None
+            return d
+
         documents = db.query(m.Document).filter_by(client_id=client_id).order_by(m.Document.uploaded_date.desc()).limit(5).all()
         return render_template("client/dashboard.html",
                                client=m.ser_client(client),
-                               policies=[m.ser_policy(p) for p in active],
+                               policies=[_ser_policy_with_days(p) for p in active],
                                next_payment=next_payment,
-                               expiring=[m.ser_policy(p) for p in expiring],
+                               expiring=[_ser_policy_with_days(p) for p in expiring],
                                documents=[m.ser_document(d) for d in documents],
                                today=today.strftime("%Y-%m-%d"))
     finally:
