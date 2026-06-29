@@ -2,8 +2,25 @@
 {% block title %}{{ 'Νέος' if action=='add' else 'Επεξεργασία' }} Πελάτης — CHI{% endblock %}
 {% block page_title %}{{ 'Νέος Πελάτης' if action=='add' else 'Επεξεργασία: ' + client.name }}{% endblock %}
 {% block content %}
+{% if duplicate_warning %}
+<div class="chi-card mb-3" style="max-width:800px;border:1px solid #FECACA;background:#FEF2F2">
+  <div class="d-flex align-items-start gap-2">
+    <i class="fas fa-triangle-exclamation mt-1" style="color:#DC2626"></i>
+    <div>
+      <div class="fw-semibold" style="color:#991B1B">Πιθανή διπλοεγγραφή ΑΦΜ</div>
+      <div style="font-size:13px;color:#7F1D1D">
+        Το ΑΦΜ {{ duplicate_warning.tax_id }} χρησιμοποιείται ήδη από τον πελάτη
+        <a href="{{ url_for('agent_client_detail', client_id=duplicate_warning.id) }}" target="_blank" style="font-weight:600;color:#991B1B;text-decoration:underline">{{ duplicate_warning.name }} (#{{ duplicate_warning.id }})</a>.
+        Αν πρόκειται όντως για τον ίδιο πελάτη, ανοίξτε την υπάρχουσα εγγραφή και επεξεργαστείτε εκείνη αντί να φτιάξετε νέα —
+        ή χρησιμοποιήστε τη <a href="{{ url_for('agent_duplicate_clients') }}" target="_blank" style="font-weight:600;color:#991B1B;text-decoration:underline">σελίδα διπλοεγγραφών</a> για συγχώνευση.
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 <div class="chi-card" style="max-width:800px">
   <form method="POST">
+    {% if duplicate_warning %}<input type="hidden" name="force_duplicate" value="1">{% endif %}
     <div class="row g-3">
       <div class="col-12"><div class="chi-card-header">Στοιχεία Ταυτότητας</div></div>
       <div class="col-md-8">
@@ -84,7 +101,9 @@
       {% endif %}
 
       <div class="col-12 d-flex gap-2 mt-2">
-        <button type="submit" class="btn btn-chi px-4"><i class="fas fa-save me-2"></i>{{ 'Προσθήκη' if action=='add' else 'Αποθήκευση' }}</button>
+        <button type="submit" class="btn {% if duplicate_warning %}btn-danger{% else %}btn-chi{% endif %} px-4">
+          <i class="fas fa-save me-2"></i>{% if duplicate_warning %}Καταχώρηση ούτως ή άλλως{% else %}{{ 'Προσθήκη' if action=='add' else 'Αποθήκευση' }}{% endif %}
+        </button>
         <a href="{{ url_for('agent_clients') }}" class="btn" style="border:1px solid #E2E8F0">Ακύρωση</a>
       </div>
     </div>
