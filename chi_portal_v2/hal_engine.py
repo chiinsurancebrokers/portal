@@ -6,7 +6,7 @@ import os, json, requests
 from datetime import datetime
 
 ANTHROPIC_API_URL = "https://api.anthropic.com/v1/messages"
-MODEL = "claude-sonnet-4-20250514"
+MODEL = "claude-sonnet-4-6"
 
 CHI_SYSTEM_CONTEXT = """Είσαι ο HAL — AI ασφαλιστικός σύμβουλος της CHI Insurance Brokers.
 Ο Παντελής Κουρμπελάς είναι ο μεσίτης. Χρησιμοποιείς ελληνικά ΕΚΤΟΣ αν ο χρήστης γράψει αγγλικά.
