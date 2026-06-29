@@ -38,8 +38,8 @@
           <div class="text-end">
             <div class="fw-bold" style="color:#1B2B5E">€{{ "{:,.2f}".format(p.premium or 0) }}</div>
             {% if p.expiration_date %}
-            {% set days = (p.expiration_date - today).days %}
-            <div class="status-badge {% if days<=30 %}badge-overdue{% else %}badge-active{% endif %}" style="font-size:10px">
+            {% set days = p.days_left %}
+            <div class="status-badge {% if days is not none and days<=30 %}badge-overdue{% else %}badge-active{% endif %}" style="font-size:10px">
               Λήγει {{ p.expiration_date | chi_date }}
             </div>
             {% endif %}
