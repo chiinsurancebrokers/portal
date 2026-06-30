@@ -6,7 +6,8 @@ import os, enum
 from datetime import datetime
 from sqlalchemy import (
     create_engine, Column, Integer, String, Float, Date, DateTime,
-    Boolean, Text, ForeignKey, Enum as SQLEnum, LargeBinary, text
+    Boolean, Text, ForeignKey, Enum as SQLEnum, LargeBinary, text,
+    UniqueConstraint
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
@@ -344,6 +345,23 @@ class EmailQueue(Base):
     payment         = relationship("Payment", back_populates="email_queue")
 
 
+class RelatedAFM(Base):
+    """Links clients that belong to the same family (different ΑΦΜ, same family)."""
+    __tablename__ = "related_afm"
+    id            = Column(Integer, primary_key=True)
+    client_id     = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    related_client_id = Column(Integer, ForeignKey("clients.id"), nullable=False)
+    relationship_label = Column(String(100))   # e.g. "Σύζυγος", "Γονέας", "Τέκνο"
+    created_date  = Column(DateTime, default=datetime.now)
+
+    client        = relationship("Client", foreign_keys=[client_id])
+    related_client = relationship("Client", foreign_keys=[related_client_id])
+
+    __table_args__ = (
+        UniqueConstraint('client_id', 'related_client_id', name='uq_related_afm_pair'),
+    )
+
+
 # ── DATABASE SETUP ─────────────────────────────────────────────────────────────
 
 _engine = None
@@ -525,4 +543,18 @@ def ser_agent(a) -> dict:
         "tax_id": a.tax_id or "", "commission_rate": float(a.commission_rate or 0),
         "active": bool(a.active), "is_admin": bool(a.is_admin),
         "notes": a.notes or "", "created_date": _d(a.created_date),
+    }
+
+def ser_related_afm(r, related_client=None) -> dict:
+    if not r: return {}
+    rc = related_client or r.related_client
+    return {
+        "id": r.id,
+        "client_id": r.client_id,
+        "related_client_id": r.related_client_id,
+        "relationship_label": r.relationship_label or "",
+        "related_client_name": rc.name if rc else "",
+        "related_client_tax_id": rc.tax_id if rc else "",
+        "related_client_phone": (rc.mobile or rc.phone or "") if rc else "",
+        "created_date": _d(r.created_date),
     }
