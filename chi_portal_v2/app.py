@@ -680,6 +680,46 @@ def agent_client_detail(client_id):
                 "commission":   pd["commission"],
             })
         sectors_d = [{"name": s.name, "value": s.value} for s in m.PolicySector]
+
+        # ── Related AFM (family) ──
+        related_links = db.query(m.RelatedAFM).filter(
+            (m.RelatedAFM.client_id == client_id) | (m.RelatedAFM.related_client_id == client_id)
+        ).all()
+        related_clients_data = []
+        family_policies = []
+        seen_ids = set()
+        for link in related_links:
+            # Determine the "other" client
+            other_id = link.related_client_id if link.client_id == client_id else link.client_id
+            if other_id in seen_ids:
+                continue
+            seen_ids.add(other_id)
+            other_client = db.query(m.Client).get(other_id)
+            if not other_client:
+                continue
+            # Determine relationship label (reverse if needed)
+            label = link.relationship_label or ""
+            link_id = link.id
+            related_clients_data.append({
+                "link_id": link_id,
+                "client": m.ser_client(other_client),
+                "relationship_label": label,
+            })
+            # Get policies for this family member
+            other_policies = db.query(m.Policy).filter_by(client_id=other_id).order_by(m.Policy.expiration_date).all()
+            for op in other_policies:
+                family_policies.append({
+                    "policy": m.ser_policy(op),
+                    "client_name": other_client.name,
+                    "client_id": other_client.id,
+                    "client_tax_id": other_client.tax_id or "",
+                })
+        # family totals
+        family_total_premium = sum(
+            fp["policy"]["premium"] for fp in family_policies
+            if fp["policy"]["status_name"] == "ACTIVE"
+        )
+
         return render_template("agent/client_detail.html",
             client=client_d, pol_data=pol_data_d,
             tickets=[m.ser_ticket(t) for t in tickets],
@@ -687,7 +727,91 @@ def agent_client_detail(client_id):
             claims=[m.ser_claim(c) for c in claims],
             today=today.strftime("%Y-%m-%d"),
             total_premium=total_premium, total_commission=total_commission,
-            sectors=sectors_d)
+            sectors=sectors_d,
+            related_clients=related_clients_data,
+            family_policies=family_policies,
+            family_total_premium=family_total_premium)
+    finally:
+        db.close()
+
+# ── RELATED AFM (Family linking) ──────────────────────────────────────────
+
+@app.route("/agent/client/<int:client_id>/related-afm/search")
+@agent_required
+def agent_search_clients_for_afm(client_id):
+    """Search clients by name or AFM to link as family."""
+    q = request.args.get("q", "").strip()
+    if len(q) < 2:
+        return jsonify([])
+    db = m.get_session()
+    try:
+        results = db.query(m.Client).filter(
+            m.Client.id != client_id,
+            (m.Client.name.ilike(f"%{q}%")) | (m.Client.tax_id.ilike(f"%{q}%"))
+        ).limit(10).all()
+        # Exclude already-linked clients
+        existing = db.query(m.RelatedAFM).filter(
+            (m.RelatedAFM.client_id == client_id) | (m.RelatedAFM.related_client_id == client_id)
+        ).all()
+        linked_ids = set()
+        for link in existing:
+            linked_ids.add(link.client_id)
+            linked_ids.add(link.related_client_id)
+        return jsonify([
+            {"id": c.id, "name": c.name, "tax_id": c.tax_id or "", "phone": c.mobile or c.phone or ""}
+            for c in results if c.id not in linked_ids
+        ])
+    finally:
+        db.close()
+
+@app.route("/agent/client/<int:client_id>/related-afm/add", methods=["POST"])
+@agent_required
+def agent_add_related_afm(client_id):
+    """Link another client as family member."""
+    db = m.get_session()
+    try:
+        related_id = int(request.form.get("related_client_id", 0))
+        label = request.form.get("relationship_label", "").strip()
+        if not related_id or related_id == client_id:
+            flash("Μη έγκυρος πελάτης.", "error")
+            return redirect(url_for("agent_client_detail", client_id=client_id))
+        # Check not already linked
+        existing = db.query(m.RelatedAFM).filter(
+            ((m.RelatedAFM.client_id == client_id) & (m.RelatedAFM.related_client_id == related_id)) |
+            ((m.RelatedAFM.client_id == related_id) & (m.RelatedAFM.related_client_id == client_id))
+        ).first()
+        if existing:
+            flash("Αυτός ο πελάτης είναι ήδη συσχετισμένος.", "warning")
+            return redirect(url_for("agent_client_detail", client_id=client_id))
+        link = m.RelatedAFM(client_id=client_id, related_client_id=related_id, relationship_label=label)
+        db.add(link)
+        db.commit()
+        flash("✅ Συσχέτιση ΑΦΜ προστέθηκε!", "success")
+    except Exception as e:
+        db.rollback()
+        flash(f"Σφάλμα: {e}", "error")
+    finally:
+        db.close()
+    return redirect(url_for("agent_client_detail", client_id=client_id))
+
+@app.route("/agent/related-afm/<int:link_id>/remove", methods=["POST"])
+@agent_required
+def agent_remove_related_afm(link_id):
+    """Remove a family link."""
+    db = m.get_session()
+    try:
+        link = db.query(m.RelatedAFM).get(link_id)
+        if not link:
+            abort(404)
+        client_id = int(request.form.get("client_id", link.client_id))
+        db.delete(link)
+        db.commit()
+        flash("Η συσχέτιση αφαιρέθηκε.", "success")
+        return redirect(url_for("agent_client_detail", client_id=client_id))
+    except Exception as e:
+        db.rollback()
+        flash(f"Σφάλμα: {e}", "error")
+        return redirect(url_for("agent_clients"))
     finally:
         db.close()
 
