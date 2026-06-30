@@ -120,6 +120,8 @@
       <i class="fas fa-ticket-alt me-1"></i>Tickets <span class="badge" style="background:#DBEAFE;color:#1D4ED8;font-size:10px">{{ tickets|length }}</span></a></li>
     <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('docs_tab',this)">
       <i class="fas fa-folder me-1"></i>Έγγραφα <span class="badge" style="background:#F1F5F9;color:#64748B;font-size:10px">{{ documents|length }}</span></a></li>
+    <li class="nav-item"><a class="nav-link" href="#" onclick="showTab('related_afm_tab',this)">
+      <i class="fas fa-users me-1"></i>Συσχετ. ΑΦΜ {% if related_clients %}<span class="badge" style="background:#DBEAFE;color:#1D4ED8;font-size:10px">{{ related_clients|length }}</span>{% endif %}</a></li>
   </ul>
 </div>
 
@@ -369,6 +371,133 @@
   </div>
 </div>
 
+<!-- TAB: RELATED AFM (Family) -->
+<div id="tab-related_afm_tab" class="tab-content-chi" style="display:none">
+
+  <!-- Add Related Client -->
+  <div class="chi-card mb-3">
+    <div class="chi-card-header"><i class="fas fa-link me-2"></i>Προσθήκη Συσχετιζόμενου ΑΦΜ</div>
+    <div style="font-size:12px;color:#64748B;margin-bottom:12px">Αναζητήστε πελάτη κατά όνομα ή ΑΦΜ για να τον συνδέσετε ως μέλος οικογένειας.</div>
+    <div class="row g-2 align-items-end">
+      <div class="col-md-5">
+        <label class="form-label fw-semibold" style="font-size:12px">Αναζήτηση Πελάτη</label>
+        <input type="text" id="relatedAfmSearch" class="form-control form-control-sm" placeholder="Πληκτρολογήστε όνομα ή ΑΦΜ..." autocomplete="off">
+        <div id="relatedAfmResults" style="position:relative">
+          <div id="relatedAfmDropdown" style="display:none;position:absolute;z-index:100;background:white;border:1px solid #E2E8F0;border-radius:8px;width:100%;max-height:200px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.1);margin-top:4px"></div>
+        </div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-semibold" style="font-size:12px">Σχέση</label>
+        <select id="relatedAfmLabel" class="form-select form-select-sm">
+          <option value="">— Επιλέξτε —</option>
+          <option value="Σύζυγος">Σύζυγος</option>
+          <option value="Γονέας">Γονέας</option>
+          <option value="Τέκνο">Τέκνο</option>
+          <option value="Αδερφός/ή">Αδερφός/ή</option>
+          <option value="Άλλο μέλος">Άλλο μέλος</option>
+        </select>
+      </div>
+      <div class="col-md-4">
+        <div id="relatedAfmSelected" style="display:none;background:#F0FDF4;border:1px solid #BBF7D0;border-radius:8px;padding:8px 12px;font-size:12px">
+          <div class="d-flex align-items-center justify-content-between">
+            <span><i class="fas fa-user-check me-1" style="color:#16A34A"></i><strong id="selectedClientName"></strong> <span id="selectedClientAfm" style="color:#64748B;font-size:11px"></span></span>
+            <button type="button" onclick="clearRelatedSelection()" class="btn btn-sm py-0 px-1" style="font-size:10px;color:#DC2626">✕</button>
+          </div>
+          <form method="POST" action="{{ url_for('agent_add_related_afm', client_id=client.id) }}" class="mt-2">
+            <input type="hidden" name="related_client_id" id="selectedClientId">
+            <input type="hidden" name="relationship_label" id="selectedLabel">
+            <button type="submit" onclick="document.getElementById('selectedLabel').value=document.getElementById('relatedAfmLabel').value" class="btn btn-sm btn-chi w-100" style="font-size:11px"><i class="fas fa-link me-1"></i>Σύνδεση</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Linked Family Members -->
+  {% if related_clients %}
+  <div class="chi-card mb-3">
+    <div class="chi-card-header"><i class="fas fa-users me-2"></i>Μέλη Οικογένειας ({{ related_clients|length }})</div>
+    <div class="table-responsive">
+      <table class="chi-table" style="font-size:12.5px">
+        <thead><tr><th>Όνομα</th><th>ΑΦΜ</th><th>Σχέση</th><th>Τηλέφωνο</th><th></th></tr></thead>
+        <tbody>
+          {% for rc in related_clients %}
+          <tr>
+            <td><a href="{{ url_for('agent_client_detail', client_id=rc.client.id) }}" style="color:var(--chi-navy);text-decoration:none;font-weight:600">
+              <i class="fas fa-user me-1"></i>{{ rc.client.name }}</a></td>
+            <td style="font-family:monospace;font-size:12px">{{ rc.client.tax_id or '—' }}</td>
+            <td>{% if rc.relationship_label %}<span class="status-badge" style="background:#EEF2FF;color:#3730A3;font-size:10px">{{ rc.relationship_label }}</span>{% else %}—{% endif %}</td>
+            <td style="font-size:12px;color:#64748B">{{ rc.client.mobile or rc.client.phone or '—' }}</td>
+            <td>
+              <form method="POST" action="{{ url_for('agent_remove_related_afm', link_id=rc.link_id) }}" style="display:inline"
+                    onsubmit="return confirm('Αφαίρεση συσχέτισης με {{ rc.client.name }};')">
+                <input type="hidden" name="client_id" value="{{ client.id }}">
+                <button type="submit" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #FEE2E2;color:#DC2626;background:white">✕</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Family Policies Overview -->
+  {% if family_policies %}
+  <div class="chi-card mb-3">
+    <div class="chi-card-header">
+      <i class="fas fa-file-contract me-2"></i>Συμβόλαια Οικογένειας
+      <span class="badge ms-2" style="background:var(--chi-navy);color:var(--chi-gold);font-size:10px">{{ family_policies|length }}</span>
+      <span class="ms-3" style="font-size:12px;color:#64748B">Σύνολο ασφαλίστρων: <strong style="color:var(--chi-navy)">€{{ "{:,.2f}".format(family_total_premium) }}</strong></span>
+    </div>
+    <div class="table-responsive">
+      <table class="chi-table" style="font-size:12.5px">
+        <thead><tr><th>Μέλος</th><th>ΑΦΜ</th><th>Συμβόλαιο</th><th>Πάροχος</th><th>Κλάδος</th><th>Ασφάλιστρο</th><th>Λήξη</th><th>Κατάσταση</th></tr></thead>
+        <tbody>
+          {% for fp in family_policies %}
+          <tr>
+            <td><a href="{{ url_for('agent_client_detail', client_id=fp.client_id) }}" style="color:var(--chi-navy);text-decoration:none;font-weight:600">{{ fp.client_name }}</a></td>
+            <td style="font-family:monospace;font-size:11px;color:#64748B">{{ fp.client_tax_id or '—' }}</td>
+            <td>{{ fp.policy.policy_type or '—' }}{% if fp.policy.license_plate %} <span style="color:#94A3B8;font-size:10px">({{ fp.policy.license_plate }})</span>{% endif %}</td>
+            <td style="color:#64748B">{{ fp.policy.provider or '—' }}</td>
+            <td>{% if fp.policy.sector %}<span class="status-badge sect-{{ fp.policy.sector_name|lower }}" style="font-size:10px">{{ fp.policy.sector }}</span>{% endif %}</td>
+            <td class="fw-bold">€{{ "{:,.2f}".format(fp.policy.premium) }}</td>
+            <td>{{ fp.policy.expiration_date | chi_date }}</td>
+            <td><span class="status-badge {% if fp.policy.status_name=='ACTIVE' %}badge-active{% elif fp.policy.status_name=='EXPIRED' %}badge-expired{% else %}badge-cancelled{% endif %}" style="font-size:10px">{{ fp.policy.status }}</span></td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Combined Summary -->
+  <div class="chi-card mb-3">
+    <div class="row g-3 text-center">
+      <div class="col-4">
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px">Πελάτης</div>
+        <div style="font-size:20px;font-weight:800;color:var(--chi-navy)">€{{ "{:,.0f}".format(total_premium) }}</div>
+      </div>
+      <div class="col-4">
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px">Οικογένεια</div>
+        <div style="font-size:20px;font-weight:800;color:#1D4ED8">€{{ "{:,.0f}".format(family_total_premium) }}</div>
+      </div>
+      <div class="col-4">
+        <div style="font-size:10px;color:#94A3B8;text-transform:uppercase;letter-spacing:1px">Σύνολο</div>
+        <div style="font-size:20px;font-weight:800;color:#16A34A">€{{ "{:,.0f}".format(total_premium + family_total_premium) }}</div>
+      </div>
+    </div>
+  </div>
+  {% elif not related_clients %}
+  <div class="chi-card text-center py-4" style="color:#94A3B8">
+    <i class="fas fa-users fa-2x d-block mb-2"></i>
+    Δεν υπάρχουν συσχετισμένα ΑΦΜ.<br>
+    <span style="font-size:12px">Χρησιμοποιήστε την αναζήτηση παραπάνω για να συνδέσετε μέλη οικογένειας.</span>
+  </div>
+  {% endif %}
+</div>
+
 <!-- MODALS -->
 <!-- Add Ticket -->
 <div class="modal fade" id="addTicketModal" tabindex="-1">
@@ -508,6 +637,57 @@ async function saveCoverage() {
   const d = await r.json();
   if (d.ok) { alert('✅ Αποθηκεύτηκε!'); location.reload(); }
   else alert('Σφάλμα: ' + (d.error||''));
+}
+
+// ── Related AFM Search ──
+let afmSearchTimeout = null;
+const afmSearchInput = document.getElementById('relatedAfmSearch');
+const afmDropdown = document.getElementById('relatedAfmDropdown');
+if (afmSearchInput) {
+  afmSearchInput.addEventListener('input', function() {
+    clearTimeout(afmSearchTimeout);
+    const q = this.value.trim();
+    if (q.length < 2) { afmDropdown.style.display = 'none'; return; }
+    afmSearchTimeout = setTimeout(async () => {
+      const r = await fetch(`/agent/client/{{ client.id }}/related-afm/search?q=${encodeURIComponent(q)}`);
+      const data = await r.json();
+      if (!data.length) {
+        afmDropdown.innerHTML = '<div style="padding:10px;font-size:12px;color:#94A3B8;text-align:center">Δεν βρέθηκαν αποτελέσματα</div>';
+        afmDropdown.style.display = 'block';
+        return;
+      }
+      afmDropdown.innerHTML = data.map(c => `
+        <div onclick="selectRelatedClient(${c.id}, '${c.name.replace(/'/g,"\\'")}', '${c.tax_id}')"
+             style="padding:10px 14px;cursor:pointer;border-bottom:1px solid #F1F5F9;font-size:12.5px;transition:background 0.15s"
+             onmouseover="this.style.background='#F8FAFC'" onmouseout="this.style.background='white'">
+          <strong>${c.name}</strong>
+          <span style="color:#64748B;margin-left:8px;font-family:monospace;font-size:11px">${c.tax_id || '—'}</span>
+          ${c.phone ? '<span style="color:#94A3B8;margin-left:8px;font-size:11px">'+c.phone+'</span>' : ''}
+        </div>
+      `).join('');
+      afmDropdown.style.display = 'block';
+    }, 300);
+  });
+  // Close dropdown on outside click
+  document.addEventListener('click', function(e) {
+    if (!afmSearchInput.contains(e.target) && !afmDropdown.contains(e.target)) {
+      afmDropdown.style.display = 'none';
+    }
+  });
+}
+
+function selectRelatedClient(id, name, taxId) {
+  document.getElementById('selectedClientId').value = id;
+  document.getElementById('selectedClientName').textContent = name;
+  document.getElementById('selectedClientAfm').textContent = taxId ? '(ΑΦΜ: '+taxId+')' : '';
+  document.getElementById('relatedAfmSelected').style.display = 'block';
+  afmDropdown.style.display = 'none';
+  afmSearchInput.value = '';
+}
+
+function clearRelatedSelection() {
+  document.getElementById('relatedAfmSelected').style.display = 'none';
+  document.getElementById('selectedClientId').value = '';
 }
 </script>
 {% endblock %}
