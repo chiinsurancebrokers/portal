@@ -958,6 +958,7 @@ def agent_edit_policy(policy_id):
             sector_val = request.form.get("sector")
             prem = float(request.form.get("premium") or 0)
             comm_rate = float(request.form.get("commission_rate") or 0)
+            premium_changed = abs((policy.premium or 0) - prem) > 0.001
             policy.policy_number  = request.form.get("policy_number")
             policy.sector         = m.PolicySector[sector_val] if sector_val else m.PolicySector.OTHER
             policy.policy_type    = request.form.get("policy_type")
@@ -979,8 +980,22 @@ def agent_edit_policy(policy_id):
             policy.payment_frequency = m.PaymentFrequency[request.form.get("payment_frequency","ANNUAL")] if request.form.get("payment_frequency") else m.PaymentFrequency.ANNUAL
             policy.hal_summary    = None   # clear cache
             policy.updated_date   = datetime.now()
+
+            synced_payments = 0
+            if premium_changed:
+                unpaid = db.query(m.Payment).filter(
+                    m.Payment.policy_id == policy.id,
+                    m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
+                ).all()
+                for pay in unpaid:
+                    pay.amount = prem
+                    synced_payments += 1
+
             db.commit()
-            flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
+            if synced_payments:
+                flash(f"✅ Συμβόλαιο ενημερώθηκε. Ενημερώθηκαν επίσης {synced_payments} εκκρεμ. πληρωμ. στο νέο ασφάλιστρο (€{prem:.2f}).", "success")
+            else:
+                flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
             return redirect(url_for("agent_client_detail", client_id=client.id))
         except Exception as e:
             db.rollback(); flash(f"Σφάλμα: {e}", "danger")
