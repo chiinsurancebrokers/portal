@@ -391,13 +391,11 @@ def agent_clients():
         all_agents    = [r[0] for r in db.query(m.Policy.agent).filter(m.Policy.agent != None).distinct().order_by(m.Policy.agent).all()]
         scope = get_agent_scope()
         q = db.query(m.Client)
-        if search:
-            q = q.filter(
-                (m.Client.name.ilike(f"%{search}%")) |
-                (m.Client.email.ilike(f"%{search}%")) |
-                (m.Client.phone.ilike(f"%{search}%")) |
-                (m.Client.tax_id.ilike(f"%{search}%"))
-            )
+        # NOTE: text search is applied in Python below (after fetch), not via
+        # SQL ILIKE, because Postgres's default "C" locale does not case-fold
+        # Greek letters (Α vs α) — ILIKE only reliably folds ASCII. Filtering
+        # client-side with Python's str.upper()/accent-stripping guarantees
+        # "πετακος", "ΠΕΤΑΚΟΣ" and "Πετάκος" all match the same client.
         # Always scope by agent if not admin
         if scope and not agent_f:
             agent_f = scope
@@ -415,6 +413,15 @@ def agent_clients():
             client_ids = [r[0] for r in policy_q.distinct().all()]
             q = q.filter(m.Client.id.in_(client_ids))
         clients = q.order_by(m.Client.name).all()
+        if search:
+            needle = _strip_greek_accents(search)
+            clients = [
+                c for c in clients
+                if needle in _strip_greek_accents(c.name or "")
+                or needle in _strip_greek_accents(c.email or "")
+                or needle in _strip_greek_accents(c.phone or "")
+                or needle in _strip_greek_accents(c.tax_id or "")
+            ]
         data = []
         today = date.today()
         for c in clients:
@@ -746,10 +753,13 @@ def agent_search_clients_for_afm(client_id):
         return jsonify([])
     db = m.get_session()
     try:
-        results = db.query(m.Client).filter(
-            m.Client.id != client_id,
-            (m.Client.name.ilike(f"%{q}%")) | (m.Client.tax_id.ilike(f"%{q}%"))
-        ).limit(10).all()
+        needle = _strip_greek_accents(q)
+        candidates = db.query(m.Client).filter(m.Client.id != client_id).all()
+        results = [
+            c for c in candidates
+            if needle in _strip_greek_accents(c.name or "")
+            or needle in _strip_greek_accents(c.tax_id or "")
+        ][:10]
         # Exclude already-linked clients
         existing = db.query(m.RelatedAFM).filter(
             (m.RelatedAFM.client_id == client_id) | (m.RelatedAFM.related_client_id == client_id)
@@ -1430,14 +1440,9 @@ def agent_payments():
                 q = q.filter(m.Payment.status == m.PaymentStatus[status_f.upper()])
             except KeyError:
                 pass
-        if search:
-            q = q.filter(
-                (m.Client.name.ilike(f"%{search}%")) |
-                (m.Client.email.ilike(f"%{search}%")) |
-                (m.Client.phone.ilike(f"%{search}%")) |
-                (m.Client.tax_id.ilike(f"%{search}%")) |
-                (m.Policy.policy_number.ilike(f"%{search}%"))
-            )
+        # NOTE: text search (name/email/phone/tax_id/policy number) is
+        # applied in Python below, after fetch — see note in agent_clients()
+        # about Postgres's "C" locale not case-folding Greek letters via ILIKE.
         if sector_f:
             try: q = q.filter(m.Policy.sector == m.PolicySector[sector_f])
             except KeyError: pass
@@ -1447,6 +1452,21 @@ def agent_payments():
             q = q.filter(m.Policy.agent == agent_f)
 
         payments = q.order_by(m.Payment.due_date.desc()).all()
+
+        if search:
+            needle = _strip_greek_accents(search)
+            filtered_by_search = []
+            for pay in payments:
+                pol = db.query(m.Policy).get(pay.policy_id)
+                c   = db.query(m.Client).get(pol.client_id) if pol else None
+                haystacks = [
+                    c.name if c else "", c.email if c else "",
+                    c.phone if c else "", c.tax_id if c else "",
+                    pol.policy_number if pol else "",
+                ]
+                if any(needle in _strip_greek_accents(h or "") for h in haystacks):
+                    filtered_by_search.append(pay)
+            payments = filtered_by_search
 
         # Month/Year filter on the policy's expiration date — same as the
         # equivalent filter on the Πελάτες page — applied in Python since
