@@ -3,6 +3,6 @@ builder = "dockerfile"
 dockerfilePath = "Dockerfile"
 
 [deploy]
-startCommand = "gunicorn --timeout 120 --workers 2 --bind 0.0.0.0:8080 app:app"
+startCommand = "gunicorn --timeout 120 --graceful-timeout 30 --workers 2 --max-requests 500 --max-requests-jitter 50 --bind 0.0.0.0:8080 app:app"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 10
