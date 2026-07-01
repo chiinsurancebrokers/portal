@@ -968,7 +968,6 @@ def agent_edit_policy(policy_id):
             sector_val = request.form.get("sector")
             prem = float(request.form.get("premium") or 0)
             comm_rate = float(request.form.get("commission_rate") or 0)
-            premium_changed = abs((policy.premium or 0) - prem) > 0.001
             policy.policy_number  = request.form.get("policy_number")
             policy.sector         = m.PolicySector[sector_val] if sector_val else m.PolicySector.OTHER
             policy.policy_type    = request.form.get("policy_type")
@@ -992,12 +991,12 @@ def agent_edit_policy(policy_id):
             policy.updated_date   = datetime.now()
 
             synced_payments = 0
-            if premium_changed:
-                unpaid = db.query(m.Payment).filter(
-                    m.Payment.policy_id == policy.id,
-                    m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
-                ).all()
-                for pay in unpaid:
+            unpaid = db.query(m.Payment).filter(
+                m.Payment.policy_id == policy.id,
+                m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
+            ).all()
+            for pay in unpaid:
+                if abs((pay.amount or 0) - prem) > 0.001:
                     pay.amount = prem
                     synced_payments += 1
 
