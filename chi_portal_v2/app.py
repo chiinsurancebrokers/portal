@@ -36,6 +36,24 @@ CHI_CONTACT = {
 def _inject_chi():
     return {"CHI_CONTACT": CHI_CONTACT}
 
+@app.context_processor
+def _inject_client_ticket_badge():
+    # Only relevant for agent/backoffice sessions; skip the query otherwise.
+    if session.get("role") not in ("agent", "backoffice"):
+        return {"open_client_tickets": 0}
+    try:
+        db = m.get_session()
+        try:
+            count = db.query(m.Ticket).filter(
+                m.Ticket.created_by == "client",
+                m.Ticket.status == m.TicketStatus.OPEN
+            ).count()
+        finally:
+            db.close()
+        return {"open_client_tickets": count}
+    except Exception:
+        return {"open_client_tickets": 0}
+
 # context_processor defined above
 
 def _run_migrations():
@@ -51,6 +69,7 @@ def _run_migrations():
             for sql in [
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_code VARCHAR(20)",
                 "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS document_id INTEGER REFERENCES documents(id)",
             ]:
                 try:
                     conn.execute(_text(sql)); conn.commit()
@@ -1323,7 +1342,8 @@ def agent_tickets():
         data = []
         for t in tickets:
             c = db.query(m.Client).get(t.client_id)
-            data.append({"ticket": m.ser_ticket(t), "client": m.ser_client(c)})
+            doc = db.query(m.Document).get(t.document_id) if t.document_id else None
+            data.append({"ticket": m.ser_ticket(t), "client": m.ser_client(c), "document": m.ser_document(doc)})
         return render_template("agent/tickets.html", tickets=data, status_f=status_f)
     finally:
         db.close()
@@ -1674,16 +1694,40 @@ def client_documents():
             if file and allowed_file(file.filename):
                 data = file.read()
                 ext  = file.filename.rsplit(".",1)[1].lower()
+                policy_id = int(request.form.get("policy_id")) if request.form.get("policy_id") else None
                 doc  = m.Document(
                     client_id=client_id,
-                    policy_id=int(request.form.get("policy_id")) if request.form.get("policy_id") else None,
+                    policy_id=policy_id,
                     filename=secure_filename(file.filename),
                     original_filename=file.filename,
                     file_type=ext, file_data=data, file_size=len(data),
                     uploaded_by=session.get("user_name","client")
                 )
-                db.add(doc); db.commit()
-                flash("✅ Αρχείο ανέβηκε.", "success")
+                db.add(doc); db.flush()  # get doc.id before commit
+
+                # Every client upload creates a Ticket too — this is what shows
+                # up as an in-portal "message" + notification badge for the
+                # agent, instead of the document silently sitting in a list.
+                doc_type = request.form.get("doc_type", "OTHER")
+                msg      = (request.form.get("message") or "").strip()
+                type_labels = {"CLAIM": "📋 Αξίωση / Ζημιά", "OTHER": "📎 Έγγραφο"}
+                subject = f"{type_labels.get(doc_type, '📎 Έγγραφο')}: {file.filename}"
+                description = msg or "Ο πελάτης ανέβασε νέο έγγραφο μέσω του portal."
+                ticket = m.Ticket(
+                    client_id=client_id,
+                    policy_id=policy_id,
+                    document_id=doc.id,
+                    subject=subject,
+                    description=description,
+                    priority=m.TicketPriority.HIGH if doc_type == "CLAIM" else m.TicketPriority.MEDIUM,
+                    status=m.TicketStatus.OPEN,
+                    created_by="client"
+                )
+                db.add(ticket)
+                db.commit()
+                flash("✅ Αρχείο ανέβηκε και ειδοποιήθηκε ο ασφαλιστικός σας σύμβουλος.", "success")
+            else:
+                flash("Μη αποδεκτός τύπος αρχείου.", "danger")
     policies  = db.query(m.Policy).filter_by(client_id=client_id).all()
     documents = db.query(m.Document).filter_by(client_id=client_id).order_by(m.Document.uploaded_date.desc()).all()
     db.close()
