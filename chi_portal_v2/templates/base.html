@@ -233,7 +233,11 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
   <a href="{{ url_for('agent_production') }}" class="nav-link-chi {% if request.endpoint=='agent_production' %}active{% endif %}">
     <i class="fas fa-chart-bar"></i><span>Παραγωγή</span></a>
   <a href="{{ url_for('agent_tickets') }}" class="nav-link-chi {% if 'ticket' in (request.endpoint or '') %}active{% endif %}">
-    <i class="fas fa-ticket-alt"></i><span>Tickets</span></a>
+    <i class="fas fa-ticket-alt"></i><span>Tickets</span>
+    {% if open_client_tickets and open_client_tickets > 0 %}
+    <span class="badge rounded-pill" style="background:#C9A96E;color:#0F1B3D;font-size:10.5px;margin-left:auto">{{ open_client_tickets }}</span>
+    {% endif %}
+  </a>
   <a href="{{ url_for('agent_import') }}" class="nav-link-chi {% if request.endpoint=='agent_import' %}active{% endif %}">
     <i class="fas fa-file-import"></i><span>Import CSV</span></a>
   <a href="{{ url_for('agent_scanner') }}" class="nav-link-chi {% if request.endpoint=='agent_scanner' %}active{% endif %}" style="color:#C9A96E!important">
@@ -258,7 +262,11 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
   <a href="{{ url_for('backoffice_scanner') }}" class="nav-link-chi {% if request.endpoint=='backoffice_scanner' %}active{% endif %}">
     <i class="fas fa-file-search"></i><span>Scanner AI</span></a>
   <a href="{{ url_for('backoffice_tickets') }}" class="nav-link-chi {% if request.endpoint=='backoffice_tickets' %}active{% endif %}">
-    <i class="fas fa-ticket-alt"></i><span>Tickets</span></a>
+    <i class="fas fa-ticket-alt"></i><span>Tickets</span>
+    {% if open_client_tickets and open_client_tickets > 0 %}
+    <span class="badge rounded-pill" style="background:#C9A96E;color:#0F1B3D;font-size:10.5px;margin-left:auto">{{ open_client_tickets }}</span>
+    {% endif %}
+  </a>
 
   {% elif session.get('role') == 'client' %}
   <div class="sidebar-role">👤 Client Portal</div>
