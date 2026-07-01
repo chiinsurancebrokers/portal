@@ -378,7 +378,11 @@ def get_engine():
         _engine = create_engine(
             get_database_url(),
             pool_pre_ping=True,
-            pool_recycle=3600,
+            pool_recycle=1800,
+            pool_size=5,
+            max_overflow=5,
+            pool_timeout=10,
+            connect_args={"connect_timeout": 10},
             echo=False
         )
     return _engine
