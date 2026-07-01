@@ -995,14 +995,21 @@ def agent_edit_policy(policy_id):
                 m.Payment.policy_id == policy.id,
                 m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
             ).all()
+            new_due = policy.start_date or policy.expiration_date
             for pay in unpaid:
+                changed = False
                 if abs((pay.amount or 0) - prem) > 0.001:
                     pay.amount = prem
+                    changed = True
+                if new_due and pay.due_date != new_due:
+                    pay.due_date = new_due
+                    changed = True
+                if changed:
                     synced_payments += 1
 
             db.commit()
             if synced_payments:
-                flash(f"✅ Συμβόλαιο ενημερώθηκε. Ενημερώθηκαν επίσης {synced_payments} εκκρεμ. πληρωμ. στο νέο ασφάλιστρο (€{prem:.2f}).", "success")
+                flash(f"✅ Συμβόλαιο ενημερώθηκε. Ενημερώθηκαν επίσης {synced_payments} εκκρεμ. πληρωμ. (ασφάλιστρο €{prem:.2f}, ημ. λήξης {new_due.strftime('%d/%m/%Y') if new_due else '—'}).", "success")
             else:
                 flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
             return redirect(url_for("agent_client_detail", client_id=client.id))
