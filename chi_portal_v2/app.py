@@ -49,12 +49,13 @@ def _run_migrations():
         engine = m.get_engine()
         with engine.connect() as conn:
             for sql in [
-                "ALTER TABLE users ADD COLUMN agent_code VARCHAR(20)",
-                "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_code VARCHAR(20)",
+                "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT TRUE",
             ]:
                 try:
                     conn.execute(_text(sql)); conn.commit()
-                except Exception: pass
+                except Exception:
+                    conn.rollback()
     except Exception:
         pass
 
