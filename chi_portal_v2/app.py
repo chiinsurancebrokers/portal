@@ -562,6 +562,28 @@ def agent_merge_clients():
             moved_emails    += db.query(m.EmailQueue).filter_by(client_id=dup.id) \
                 .update({m.EmailQueue.client_id: keeper.id}, synchronize_session=False)
 
+            # Re-point family (ΑΦΜ) links too — RelatedAFM has a UNIQUE(client_id,
+            # related_client_id) pair and NOT NULL on both sides, so a duplicate
+            # client with family links would otherwise block deletion below with
+            # a foreign-key error.
+            for link in db.query(m.RelatedAFM).filter(
+                (m.RelatedAFM.client_id == dup.id) | (m.RelatedAFM.related_client_id == dup.id)
+            ).all():
+                new_client_id = keeper.id if link.client_id == dup.id else link.client_id
+                new_related_id = keeper.id if link.related_client_id == dup.id else link.related_client_id
+                if new_client_id == new_related_id:
+                    db.delete(link)  # would link keeper to itself — drop it
+                    continue
+                collision = db.query(m.RelatedAFM).filter(
+                    m.RelatedAFM.id != link.id,
+                    ((m.RelatedAFM.client_id == new_client_id) & (m.RelatedAFM.related_client_id == new_related_id)) |
+                    ((m.RelatedAFM.client_id == new_related_id) & (m.RelatedAFM.related_client_id == new_client_id))
+                ).first()
+                if collision:
+                    db.delete(link)  # keeper already has this family link — drop the duplicate
+                else:
+                    link.client_id, link.related_client_id = new_client_id, new_related_id
+
             # Portal login accounts: only one user can own client_id at a time —
             # if the keeper has no portal account yet, hand the duplicate's over.
             dup_users = db.query(m.User).filter_by(client_id=dup.id).all()
@@ -933,7 +955,7 @@ def agent_add_policy(client_id):
                 pay = m.Payment(
                     policy_id=policy.id,
                     amount=prem,
-                    due_date=policy.expiration_date or date.today(),
+                    due_date=policy.start_date or policy.expiration_date or date.today(),
                     status=m.PaymentStatus.PENDING
                 )
                 db.add(pay)
@@ -1032,12 +1054,25 @@ def agent_edit_policy(policy_id):
 def agent_delete_policy(policy_id):
     db = m.get_session()
     policy = db.query(m.Policy).get(policy_id)
-    if policy:
-        client_id = policy.client_id
-        db.delete(policy); db.commit()
+    if not policy:
+        db.close(); abort(404)
+    client_id = policy.client_id
+    try:
+        # Detach (don't delete) related tickets/documents so history isn't
+        # lost — Payment/Claim/LixiariaEntry already cascade-delete via the
+        # relationship, but Document/Ticket intentionally don't (they can
+        # outlive the policy, e.g. an ID card or a support ticket).
+        db.query(m.Ticket).filter_by(policy_id=policy_id).update({"policy_id": None})
+        db.query(m.Document).filter_by(policy_id=policy_id).update({"policy_id": None})
+        db.delete(policy)
+        db.commit()
         flash("🗑 Συμβόλαιο διαγράφηκε.", "info")
-        return redirect(url_for("agent_client_detail", client_id=client_id))
-    db.close(); abort(404)
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Σφάλμα διαγραφής: {e}", "danger")
+    finally:
+        db.close()
+    return redirect(url_for("agent_client_detail", client_id=client_id))
 
 # HAL — Agent: explain policy
 @app.route("/agent/policy/<int:policy_id>/hal", methods=["GET","POST"])
@@ -1412,12 +1447,18 @@ def download_document(doc_id):
 def agent_delete_document(doc_id):
     db = m.get_session()
     doc = db.query(m.Document).get(doc_id)
-    if doc:
-        client_id = doc.client_id
-        db.delete(doc); db.commit()
+    if not doc:
+        db.close(); abort(404)
+    client_id = doc.client_id
+    try:
+        db.delete(doc)
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Σφάλμα διαγραφής: {e}", "danger")
+    finally:
         db.close()
-        return redirect(url_for("agent_client_detail", client_id=client_id))
-    db.close(); abort(404)
+    return redirect(url_for("agent_client_detail", client_id=client_id))
 
 # Agent: Payment management
 @app.route("/agent/payments")
@@ -2280,6 +2321,9 @@ def agent_delete_client(client_id):
         db.query(m.Ticket).filter_by(client_id=client_id).delete()
         db.query(m.Document).filter_by(client_id=client_id).delete()
         db.query(m.EmailQueue).filter_by(client_id=client_id).delete()
+        db.query(m.RelatedAFM).filter(
+            (m.RelatedAFM.client_id == client_id) | (m.RelatedAFM.related_client_id == client_id)
+        ).delete(synchronize_session=False)
         # Remove portal user link
         portal_user = db.query(m.User).filter_by(client_id=client_id).first()
         if portal_user:
