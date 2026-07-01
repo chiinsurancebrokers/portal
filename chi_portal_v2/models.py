@@ -233,6 +233,7 @@ class Ticket(Base):
     id            = Column(Integer, primary_key=True)
     client_id     = Column(Integer, ForeignKey("clients.id"), nullable=False)
     policy_id     = Column(Integer, ForeignKey("policies.id"), nullable=True)
+    document_id   = Column(Integer, ForeignKey("documents.id"), nullable=True)
     subject       = Column(String(300), nullable=False)
     description   = Column(Text)
     status        = Column(SQLEnum(TicketStatus), default=TicketStatus.OPEN)
@@ -471,6 +472,7 @@ def ser_ticket(t) -> dict:
     if not t: return {}
     return {
         "id": t.id, "client_id": t.client_id, "policy_id": t.policy_id,
+        "document_id": t.document_id,
         "subject": t.subject or "", "description": t.description or "",
         "status": _d(t.status), "status_name": t.status.name if t.status else "OPEN",
         "priority": _d(t.priority), "priority_name": t.priority.name if t.priority else "MEDIUM",
