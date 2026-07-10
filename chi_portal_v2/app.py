@@ -36,24 +36,6 @@ CHI_CONTACT = {
 def _inject_chi():
     return {"CHI_CONTACT": CHI_CONTACT}
 
-@app.context_processor
-def _inject_client_ticket_badge():
-    # Only relevant for agent/backoffice sessions; skip the query otherwise.
-    if session.get("role") not in ("agent", "backoffice"):
-        return {"open_client_tickets": 0}
-    try:
-        db = m.get_session()
-        try:
-            count = db.query(m.Ticket).filter(
-                m.Ticket.created_by == "client",
-                m.Ticket.status == m.TicketStatus.OPEN
-            ).count()
-        finally:
-            db.close()
-        return {"open_client_tickets": count}
-    except Exception:
-        return {"open_client_tickets": 0}
-
 # context_processor defined above
 
 def _run_migrations():
@@ -67,14 +49,12 @@ def _run_migrations():
         engine = m.get_engine()
         with engine.connect() as conn:
             for sql in [
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS agent_code VARCHAR(20)",
-                "ALTER TABLE users ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE tickets ADD COLUMN IF NOT EXISTS document_id INTEGER REFERENCES documents(id)",
+                "ALTER TABLE users ADD COLUMN agent_code VARCHAR(20)",
+                "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT TRUE",
             ]:
                 try:
                     conn.execute(_text(sql)); conn.commit()
-                except Exception:
-                    conn.rollback()
+                except Exception: pass
     except Exception:
         pass
 
@@ -410,11 +390,13 @@ def agent_clients():
         all_agents    = [r[0] for r in db.query(m.Policy.agent).filter(m.Policy.agent != None).distinct().order_by(m.Policy.agent).all()]
         scope = get_agent_scope()
         q = db.query(m.Client)
-        # NOTE: text search is applied in Python below (after fetch), not via
-        # SQL ILIKE, because Postgres's default "C" locale does not case-fold
-        # Greek letters (Α vs α) — ILIKE only reliably folds ASCII. Filtering
-        # client-side with Python's str.upper()/accent-stripping guarantees
-        # "πετακος", "ΠΕΤΑΚΟΣ" and "Πετάκος" all match the same client.
+        if search:
+            q = q.filter(
+                (m.Client.name.ilike(f"%{search}%")) |
+                (m.Client.email.ilike(f"%{search}%")) |
+                (m.Client.phone.ilike(f"%{search}%")) |
+                (m.Client.tax_id.ilike(f"%{search}%"))
+            )
         # Always scope by agent if not admin
         if scope and not agent_f:
             agent_f = scope
@@ -432,15 +414,6 @@ def agent_clients():
             client_ids = [r[0] for r in policy_q.distinct().all()]
             q = q.filter(m.Client.id.in_(client_ids))
         clients = q.order_by(m.Client.name).all()
-        if search:
-            needle = _strip_greek_accents(search)
-            clients = [
-                c for c in clients
-                if needle in _strip_greek_accents(c.name or "")
-                or needle in _strip_greek_accents(c.email or "")
-                or needle in _strip_greek_accents(c.phone or "")
-                or needle in _strip_greek_accents(c.tax_id or "")
-            ]
         data = []
         today = date.today()
         for c in clients:
@@ -581,28 +554,6 @@ def agent_merge_clients():
             moved_emails    += db.query(m.EmailQueue).filter_by(client_id=dup.id) \
                 .update({m.EmailQueue.client_id: keeper.id}, synchronize_session=False)
 
-            # Re-point family (ΑΦΜ) links too — RelatedAFM has a UNIQUE(client_id,
-            # related_client_id) pair and NOT NULL on both sides, so a duplicate
-            # client with family links would otherwise block deletion below with
-            # a foreign-key error.
-            for link in db.query(m.RelatedAFM).filter(
-                (m.RelatedAFM.client_id == dup.id) | (m.RelatedAFM.related_client_id == dup.id)
-            ).all():
-                new_client_id = keeper.id if link.client_id == dup.id else link.client_id
-                new_related_id = keeper.id if link.related_client_id == dup.id else link.related_client_id
-                if new_client_id == new_related_id:
-                    db.delete(link)  # would link keeper to itself — drop it
-                    continue
-                collision = db.query(m.RelatedAFM).filter(
-                    m.RelatedAFM.id != link.id,
-                    ((m.RelatedAFM.client_id == new_client_id) & (m.RelatedAFM.related_client_id == new_related_id)) |
-                    ((m.RelatedAFM.client_id == new_related_id) & (m.RelatedAFM.related_client_id == new_client_id))
-                ).first()
-                if collision:
-                    db.delete(link)  # keeper already has this family link — drop the duplicate
-                else:
-                    link.client_id, link.related_client_id = new_client_id, new_related_id
-
             # Portal login accounts: only one user can own client_id at a time —
             # if the keeper has no portal account yet, hand the duplicate's over.
             dup_users = db.query(m.User).filter_by(client_id=dup.id).all()
@@ -738,7 +689,6 @@ def agent_client_detail(client_id):
         family_policies = []
         seen_ids = set()
         for link in related_links:
-            # Determine the "other" client
             other_id = link.related_client_id if link.client_id == client_id else link.client_id
             if other_id in seen_ids:
                 continue
@@ -746,7 +696,6 @@ def agent_client_detail(client_id):
             other_client = db.query(m.Client).get(other_id)
             if not other_client:
                 continue
-            # Determine relationship label (reverse if needed)
             label = link.relationship_label or ""
             link_id = link.id
             related_clients_data.append({
@@ -754,7 +703,6 @@ def agent_client_detail(client_id):
                 "client": m.ser_client(other_client),
                 "relationship_label": label,
             })
-            # Get policies for this family member
             other_policies = db.query(m.Policy).filter_by(client_id=other_id).order_by(m.Policy.expiration_date).all()
             for op in other_policies:
                 family_policies.append({
@@ -763,7 +711,6 @@ def agent_client_detail(client_id):
                     "client_id": other_client.id,
                     "client_tax_id": other_client.tax_id or "",
                 })
-        # family totals
         family_total_premium = sum(
             fp["policy"]["premium"] for fp in family_policies
             if fp["policy"]["status_name"] == "ACTIVE"
@@ -801,7 +748,6 @@ def agent_search_clients_for_afm(client_id):
             if needle in _strip_greek_accents(c.name or "")
             or needle in _strip_greek_accents(c.tax_id or "")
         ][:10]
-        # Exclude already-linked clients
         existing = db.query(m.RelatedAFM).filter(
             (m.RelatedAFM.client_id == client_id) | (m.RelatedAFM.related_client_id == client_id)
         ).all()
@@ -827,7 +773,6 @@ def agent_add_related_afm(client_id):
         if not related_id or related_id == client_id:
             flash("Μη έγκυρος πελάτης.", "error")
             return redirect(url_for("agent_client_detail", client_id=client_id))
-        # Check not already linked
         existing = db.query(m.RelatedAFM).filter(
             ((m.RelatedAFM.client_id == client_id) & (m.RelatedAFM.related_client_id == related_id)) |
             ((m.RelatedAFM.client_id == related_id) & (m.RelatedAFM.related_client_id == client_id))
@@ -974,7 +919,7 @@ def agent_add_policy(client_id):
                 pay = m.Payment(
                     policy_id=policy.id,
                     amount=prem,
-                    due_date=policy.start_date or policy.expiration_date or date.today(),
+                    due_date=policy.expiration_date or date.today(),
                     status=m.PaymentStatus.PENDING
                 )
                 db.add(pay)
@@ -1030,29 +975,8 @@ def agent_edit_policy(policy_id):
             policy.payment_frequency = m.PaymentFrequency[request.form.get("payment_frequency","ANNUAL")] if request.form.get("payment_frequency") else m.PaymentFrequency.ANNUAL
             policy.hal_summary    = None   # clear cache
             policy.updated_date   = datetime.now()
-
-            synced_payments = 0
-            unpaid = db.query(m.Payment).filter(
-                m.Payment.policy_id == policy.id,
-                m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
-            ).all()
-            new_due = policy.start_date or policy.expiration_date
-            for pay in unpaid:
-                changed = False
-                if abs((pay.amount or 0) - prem) > 0.001:
-                    pay.amount = prem
-                    changed = True
-                if new_due and pay.due_date != new_due:
-                    pay.due_date = new_due
-                    changed = True
-                if changed:
-                    synced_payments += 1
-
             db.commit()
-            if synced_payments:
-                flash(f"✅ Συμβόλαιο ενημερώθηκε. Ενημερώθηκαν επίσης {synced_payments} εκκρεμ. πληρωμ. (ασφάλιστρο €{prem:.2f}, ημ. λήξης {new_due.strftime('%d/%m/%Y') if new_due else '—'}).", "success")
-            else:
-                flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
+            flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
             return redirect(url_for("agent_client_detail", client_id=client.id))
         except Exception as e:
             db.rollback(); flash(f"Σφάλμα: {e}", "danger")
@@ -1073,25 +997,12 @@ def agent_edit_policy(policy_id):
 def agent_delete_policy(policy_id):
     db = m.get_session()
     policy = db.query(m.Policy).get(policy_id)
-    if not policy:
-        db.close(); abort(404)
-    client_id = policy.client_id
-    try:
-        # Detach (don't delete) related tickets/documents so history isn't
-        # lost — Payment/Claim/LixiariaEntry already cascade-delete via the
-        # relationship, but Document/Ticket intentionally don't (they can
-        # outlive the policy, e.g. an ID card or a support ticket).
-        db.query(m.Ticket).filter_by(policy_id=policy_id).update({"policy_id": None})
-        db.query(m.Document).filter_by(policy_id=policy_id).update({"policy_id": None})
-        db.delete(policy)
-        db.commit()
+    if policy:
+        client_id = policy.client_id
+        db.delete(policy); db.commit()
         flash("🗑 Συμβόλαιο διαγράφηκε.", "info")
-    except Exception as e:
-        db.rollback()
-        flash(f"❌ Σφάλμα διαγραφής: {e}", "danger")
-    finally:
-        db.close()
-    return redirect(url_for("agent_client_detail", client_id=client_id))
+        return redirect(url_for("agent_client_detail", client_id=client_id))
+    db.close(); abort(404)
 
 # HAL — Agent: explain policy
 @app.route("/agent/policy/<int:policy_id>/hal", methods=["GET","POST"])
@@ -1242,9 +1153,15 @@ def agent_hal_renewal_draft(policy_id):
 @agent_required
 def agent_email_queue():
     db = m.get_session()
-    emails = db.query(m.EmailQueue).order_by(m.EmailQueue.created_date.desc()).limit(100).all()
+    scope = get_agent_scope()
+    q = db.query(m.EmailQueue).order_by(m.EmailQueue.created_date.desc())
+    if scope is not None:
+        # Scoped agent: only emails for policies that belong to them
+        q = q.join(m.Policy, m.EmailQueue.policy_id == m.Policy.id)\
+              .filter(m.Policy.agent == scope)
+    emails_raw = q.limit(100).all()
     data = []
-    for e in emails:
+    for e in emails_raw:
         c = db.query(m.Client).get(e.client_id)
         p = db.query(m.Policy).get(e.policy_id)
         data.append({"eq": m.ser_email_queue(e),
@@ -1331,6 +1248,7 @@ def agent_commissions():
 @agent_required
 def agent_tickets():
     db = m.get_session()
+    scope = get_agent_scope()
     status_f = request.args.get("status","open")
     try:
         q = db.query(m.Ticket)
@@ -1338,6 +1256,13 @@ def agent_tickets():
             q = q.filter(m.Ticket.status.in_([m.TicketStatus.OPEN, m.TicketStatus.IN_PROCESS]))
         elif status_f == "resolved":
             q = q.filter(m.Ticket.status.in_([m.TicketStatus.RESOLVED, m.TicketStatus.CLOSED]))
+        if scope is not None:
+            # Scoped agent: tickets where the linked policy belongs to them,
+            # OR (no policy_id) where the client has at least one policy belonging to them.
+            scoped_client_ids = db.query(m.Policy.client_id)\
+                                   .filter(m.Policy.agent == scope)\
+                                   .distinct().subquery()
+            q = q.filter(m.Ticket.client_id.in_(scoped_client_ids))
         tickets = q.order_by(m.Ticket.created_date.desc()).all()
         data = []
         for t in tickets:
@@ -1467,18 +1392,12 @@ def download_document(doc_id):
 def agent_delete_document(doc_id):
     db = m.get_session()
     doc = db.query(m.Document).get(doc_id)
-    if not doc:
-        db.close(); abort(404)
-    client_id = doc.client_id
-    try:
-        db.delete(doc)
-        db.commit()
-    except Exception as e:
-        db.rollback()
-        flash(f"❌ Σφάλμα διαγραφής: {e}", "danger")
-    finally:
+    if doc:
+        client_id = doc.client_id
+        db.delete(doc); db.commit()
         db.close()
-    return redirect(url_for("agent_client_detail", client_id=client_id))
+        return redirect(url_for("agent_client_detail", client_id=client_id))
+    db.close(); abort(404)
 
 # Agent: Payment management
 @app.route("/agent/payments")
@@ -1507,9 +1426,14 @@ def agent_payments():
                 q = q.filter(m.Payment.status == m.PaymentStatus[status_f.upper()])
             except KeyError:
                 pass
-        # NOTE: text search (name/email/phone/tax_id/policy number) is
-        # applied in Python below, after fetch — see note in agent_clients()
-        # about Postgres's "C" locale not case-folding Greek letters via ILIKE.
+        if search:
+            q = q.filter(
+                (m.Client.name.ilike(f"%{search}%")) |
+                (m.Client.email.ilike(f"%{search}%")) |
+                (m.Client.phone.ilike(f"%{search}%")) |
+                (m.Client.tax_id.ilike(f"%{search}%")) |
+                (m.Policy.policy_number.ilike(f"%{search}%"))
+            )
         if sector_f:
             try: q = q.filter(m.Policy.sector == m.PolicySector[sector_f])
             except KeyError: pass
@@ -1519,21 +1443,6 @@ def agent_payments():
             q = q.filter(m.Policy.agent == agent_f)
 
         payments = q.order_by(m.Payment.due_date.desc()).all()
-
-        if search:
-            needle = _strip_greek_accents(search)
-            filtered_by_search = []
-            for pay in payments:
-                pol = db.query(m.Policy).get(pay.policy_id)
-                c   = db.query(m.Client).get(pol.client_id) if pol else None
-                haystacks = [
-                    c.name if c else "", c.email if c else "",
-                    c.phone if c else "", c.tax_id if c else "",
-                    pol.policy_number if pol else "",
-                ]
-                if any(needle in _strip_greek_accents(h or "") for h in haystacks):
-                    filtered_by_search.append(pay)
-            payments = filtered_by_search
 
         # Month/Year filter on the policy's expiration date — same as the
         # equivalent filter on the Πελάτες page — applied in Python since
@@ -1694,40 +1603,16 @@ def client_documents():
             if file and allowed_file(file.filename):
                 data = file.read()
                 ext  = file.filename.rsplit(".",1)[1].lower()
-                policy_id = int(request.form.get("policy_id")) if request.form.get("policy_id") else None
                 doc  = m.Document(
                     client_id=client_id,
-                    policy_id=policy_id,
+                    policy_id=int(request.form.get("policy_id")) if request.form.get("policy_id") else None,
                     filename=secure_filename(file.filename),
                     original_filename=file.filename,
                     file_type=ext, file_data=data, file_size=len(data),
                     uploaded_by=session.get("user_name","client")
                 )
-                db.add(doc); db.flush()  # get doc.id before commit
-
-                # Every client upload creates a Ticket too — this is what shows
-                # up as an in-portal "message" + notification badge for the
-                # agent, instead of the document silently sitting in a list.
-                doc_type = request.form.get("doc_type", "OTHER")
-                msg      = (request.form.get("message") or "").strip()
-                type_labels = {"CLAIM": "📋 Αξίωση / Ζημιά", "OTHER": "📎 Έγγραφο"}
-                subject = f"{type_labels.get(doc_type, '📎 Έγγραφο')}: {file.filename}"
-                description = msg or "Ο πελάτης ανέβασε νέο έγγραφο μέσω του portal."
-                ticket = m.Ticket(
-                    client_id=client_id,
-                    policy_id=policy_id,
-                    document_id=doc.id,
-                    subject=subject,
-                    description=description,
-                    priority=m.TicketPriority.HIGH if doc_type == "CLAIM" else m.TicketPriority.MEDIUM,
-                    status=m.TicketStatus.OPEN,
-                    created_by="client"
-                )
-                db.add(ticket)
-                db.commit()
-                flash("✅ Αρχείο ανέβηκε και ειδοποιήθηκε ο ασφαλιστικός σας σύμβουλος.", "success")
-            else:
-                flash("Μη αποδεκτός τύπος αρχείου.", "danger")
+                db.add(doc); db.commit()
+                flash("✅ Αρχείο ανέβηκε.", "success")
     policies  = db.query(m.Policy).filter_by(client_id=client_id).all()
     documents = db.query(m.Document).filter_by(client_id=client_id).order_by(m.Document.uploaded_date.desc()).all()
     db.close()
@@ -2365,9 +2250,6 @@ def agent_delete_client(client_id):
         db.query(m.Ticket).filter_by(client_id=client_id).delete()
         db.query(m.Document).filter_by(client_id=client_id).delete()
         db.query(m.EmailQueue).filter_by(client_id=client_id).delete()
-        db.query(m.RelatedAFM).filter(
-            (m.RelatedAFM.client_id == client_id) | (m.RelatedAFM.related_client_id == client_id)
-        ).delete(synchronize_session=False)
         # Remove portal user link
         portal_user = db.query(m.User).filter_by(client_id=client_id).first()
         if portal_user:
