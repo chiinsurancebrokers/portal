@@ -5,38 +5,38 @@
 <div class="row g-3">
   <div class="col-lg-4">
     <div class="chi-card">
-      <div class="chi-card-header"><i class="fas fa-upload me-2"></i>Ανέβασμα Εγγράφου</div>
+      <div class="chi-card-header"><i class="fas fa-upload me-2"></i><span data-i18n="doc_upload_title">Ανέβασμα Εγγράφου</span></div>
       <form method="POST" enctype="multipart/form-data">
         <div class="mb-3">
-          <label class="form-label fw-semibold" style="font-size:13px">Τύπος Εγγράφου</label>
+          <label class="form-label fw-semibold" style="font-size:13px"><span data-i18n="doc_type_label">Τύπος Εγγράφου</span></label>
           <select name="doc_type" class="form-select">
-            <option value="OTHER">Γενικό Έγγραφο</option>
-            <option value="CLAIM">Αξίωση / Ζημιά</option>
+            <option value="OTHER"><span data-i18n="doc_type_general">Γενικό Έγγραφο</span></option>
+            <option value="CLAIM"><span data-i18n="doc_type_claim">Αξίωση / Ζημιά</span></option>
           </select>
         </div>
         <div class="mb-3">
-          <label class="form-label fw-semibold" style="font-size:13px">Αρχείο</label>
+          <label class="form-label fw-semibold" style="font-size:13px"><span data-i18n="doc_file_label">Αρχείο</span></label>
           <input type="file" name="file" class="form-control" accept=".pdf,.jpg,.png,.docx" required>
-          <div style="font-size:11px;color:#94A3B8;margin-top:4px">PDF, JPG, PNG, DOCX · Μέγ. 16MB</div>
+          <div style="font-size:11px;color:#94A3B8;margin-top:4px"><span data-i18n="doc_file_hint">PDF, JPG, PNG, DOCX · Μέγ. 16MB</span></div>
         </div>
         <div class="mb-3">
-          <label class="form-label fw-semibold" style="font-size:13px">Σχετικό Συμβόλαιο</label>
+          <label class="form-label fw-semibold" style="font-size:13px"><span data-i18n="doc_policy_label">Σχετικό Συμβόλαιο</span></label>
           <select name="policy_id" class="form-select">
-            <option value="">— Γενικό Έγγραφο —</option>
+            <option value=""><span data-i18n="doc_policy_general">— Γενικό Έγγραφο —</span></option>
             {% for p in policies %}<option value="{{ p.id }}">{{ p.policy_type }}</option>{% endfor %}
           </select>
         </div>
         <div class="mb-3">
-          <label class="form-label fw-semibold" style="font-size:13px">Μήνυμα (προαιρετικό)</label>
-          <textarea name="message" class="form-control" rows="3" placeholder="π.χ. περιγραφή ζημιάς, διευκρίνιση..."></textarea>
+          <label class="form-label fw-semibold" style="font-size:13px"><span data-i18n="doc_message_label">Μήνυμα (προαιρετικό)</span></label>
+          <textarea name="message" class="form-control" rows="3" placeholder="π.χ. περιγραφή ζημιάς, διευκρίνιση..." data-i18n-placeholder="doc_message_ph"></textarea>
         </div>
-        <button type="submit" class="btn btn-chi w-100"><i class="fas fa-upload me-2"></i>Ανέβασμα</button>
+        <button type="submit" class="btn btn-chi w-100"><i class="fas fa-upload me-2"></i><span data-i18n="doc_upload_btn">Ανέβασμα</span></button>
       </form>
     </div>
   </div>
   <div class="col-lg-8">
     <div class="chi-card">
-      <div class="chi-card-header"><i class="fas fa-list me-2"></i>Έγγραφά μου ({{ documents|length }})</div>
+      <div class="chi-card-header"><i class="fas fa-list me-2"></i><span data-i18n="doc_list_title">Έγγραφά μου</span> ({{ documents|length }})</div>
       {% for doc in documents %}
       <div class="d-flex align-items-center justify-content-between p-3 mb-2" style="background:#F8FAFC;border-radius:8px;border:1px solid #E2E8F0">
         <div>
@@ -48,11 +48,11 @@
           </div>
         </div>
         <a href="{{ url_for('download_document', doc_id=doc.id) }}" class="btn btn-sm btn-chi" style="font-size:12px">
-          <i class="fas fa-download me-1"></i>Λήψη
+          <i class="fas fa-download me-1"></i><span data-i18n="doc_download">Λήψη</span>
         </a>
       </div>
       {% else %}
-      <div class="text-center py-4" style="color:#94A3B8"><i class="fas fa-folder-open fa-2x d-block mb-2"></i>Δεν υπάρχουν έγγραφα</div>
+      <div class="text-center py-4" style="color:#94A3B8"><i class="fas fa-folder-open fa-2x d-block mb-2"></i><span data-i18n="doc_no_docs">Δεν υπάρχουν έγγραφα</span></div>
       {% endfor %}
     </div>
   </div>
