@@ -137,6 +137,20 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
 .btn-chi:hover{background:var(--chi-blue);color:white}
 .btn-gold{background:var(--chi-gold);color:#1C1410;border:none;font-weight:600}
 .btn-gold:hover{background:#B8934F;color:#1C1410}
+/* ── LANGUAGE TOGGLE ──────────────────────────────────────────────── */
+#lang-toggle{display:flex;align-items:center;gap:3px;background:rgba(0,0,0,0.06);border-radius:20px;padding:3px}
+.lang-btn{
+  display:flex;align-items:center;gap:4px;padding:4px 9px;border:none;
+  background:transparent;border-radius:16px;cursor:pointer;
+  font-size:11px;font-weight:700;color:var(--chi-muted);transition:all 0.15s;
+  line-height:1;
+}
+.lang-btn:hover{background:white;color:var(--chi-navy);box-shadow:0 1px 4px rgba(0,0,0,0.1)}
+.lang-btn.active{background:var(--chi-navy);color:white;box-shadow:0 1px 4px rgba(0,0,0,0.15)}
+.lang-flag{font-size:14px;line-height:1}
+.lang-label{font-size:10px;font-weight:700;letter-spacing:0.3px}
+@media(max-width:380px){.lang-label{display:none}}
+
 
 /* ── SEARCH ───────────────────────────────────────────────────────── */
 .search-bar{border:1px solid var(--chi-border);border-radius:8px;padding:8px 14px;font-size:13px;width:100%}
@@ -269,15 +283,15 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
   </a>
 
   {% elif session.get('role') == 'client' %}
-  <div class="sidebar-role">👤 Client Portal</div>
+  <div class="sidebar-role" data-i18n="nav_client_portal">👤 Client Portal</div>
   <a href="{{ url_for('client_dashboard') }}" class="nav-link-chi {% if request.endpoint=='client_dashboard' %}active{% endif %}">
-    <i class="fas fa-home"></i><span>Αρχική</span></a>
+    <i class="fas fa-home"></i><span data-i18n="nav_home">Αρχική</span></a>
   <a href="{{ url_for('client_policies') }}" class="nav-link-chi {% if request.endpoint=='client_policies' %}active{% endif %}">
-    <i class="fas fa-file-contract"></i><span>Ασφαλιστήριά μου</span></a>
+    <i class="fas fa-file-contract"></i><span data-i18n="nav_policies">Ασφαλιστήριά μου</span></a>
   <a href="{{ url_for('client_documents') }}" class="nav-link-chi {% if request.endpoint=='client_documents' %}active{% endif %}">
-    <i class="fas fa-folder"></i><span>Έγγραφα</span></a>
+    <i class="fas fa-folder"></i><span data-i18n="nav_documents">Έγγραφα</span></a>
   <a href="{{ url_for('client_hal') }}" class="nav-link-chi {% if request.endpoint=='client_hal' %}active{% endif %}">
-    <i class="fas fa-robot"></i><span>HAL Assistant</span></a>
+    <i class="fas fa-robot"></i><span data-i18n="nav_hal">HAL Assistant</span></a>
   {% endif %}
 
   <div class="sidebar-footer">
@@ -290,9 +304,9 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
     </div>
     <div style="color:var(--chi-gold);font-weight:600;font-size:10px;margin-bottom:6px">HAL v2 · AI Powered</div>
     <a href="{{ url_for('change_password') }}" style="color:rgba(255,255,255,0.55);text-decoration:none;font-size:12px;display:block;padding:3px 0">
-      <i class="fas fa-cog me-2"></i>Ρυθμίσεις</a>
+      <i class="fas fa-cog me-2"></i data-i18n="nav_settings">Ρυθμίσεις</a>
     <a href="{{ url_for('logout') }}" style="color:rgba(255,255,255,0.35);text-decoration:none;font-size:11px;margin-top:4px;display:block;padding:3px 0">
-      <i class="fas fa-sign-out-alt me-1"></i>Αποσύνδεση</a>
+      <i class="fas fa-sign-out-alt me-1"></i data-i18n="nav_logout">Αποσύνδεση</a>
   </div>
 </nav>
 
@@ -307,6 +321,9 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
     <div class="topbar-title">{% block page_title %}CHI{% endblock %}</div>
     <div class="d-flex align-items-center gap-2">
       {% block topbar_actions %}{% endblock %}
+      {% if session.get('role') == 'client' %}
+      <div id="lang-toggle"></div>
+      {% endif %}
       <a href="{{ url_for('change_password') }}" class="d-md-none" style="color:var(--chi-muted);padding:4px 6px" title="Ρυθμίσεις">
         <i class="fas fa-cog" style="font-size:16px"></i>
       </a>
@@ -370,11 +387,11 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
 <nav class="bottom-nav">
   <div class="bottom-nav-inner">
     <a href="{{ url_for('client_dashboard') }}" class="{% if request.endpoint=='client_dashboard' %}active{% endif %}">
-      <i class="fas fa-home"></i>Αρχική</a>
+      <i class="fas fa-home"></i data-i18n="nav_home">Αρχική</a>
     <a href="{{ url_for('client_policies') }}" class="{% if request.endpoint=='client_policies' %}active{% endif %}">
-      <i class="fas fa-file-contract"></i>Συμβόλαια</a>
+      <i class="fas fa-file-contract"></i data-i18n="nav_policies">Συμβόλαια</a>
     <a href="{{ url_for('client_documents') }}" class="{% if request.endpoint=='client_documents' %}active{% endif %}">
-      <i class="fas fa-folder"></i>Έγγραφα</a>
+      <i class="fas fa-folder"></i data-i18n="nav_documents">Έγγραφα</a>
     <a href="{{ url_for('client_hal') }}" class="{% if request.endpoint=='client_hal' %}active{% endif %}">
       <i class="fas fa-robot"></i>HAL</a>
   </div>
@@ -382,6 +399,7 @@ body{background:var(--chi-light);color:var(--chi-text);font-family:'Segoe UI',sy
 {% endif %}
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/static/js/i18n.js"></script>
 <script>
 function openSidebar() {
   document.getElementById('sidebar').classList.add('open');
