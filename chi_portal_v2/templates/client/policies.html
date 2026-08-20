@@ -26,25 +26,25 @@
 
   <div class="row g-3 mt-2" style="font-size:13px">
     <div class="col-sm-4">
-      <div style="color:#94A3B8;font-size:11px">ΕΝΑΡΞΗ</div>
+      <div style="color:#94A3B8;font-size:11px"><span data-i18n="pol_start">ΕΝΑΡΞΗ</span></div>
       <div class="fw-semibold">{{ p.start_date | chi_date }}</div>
     </div>
     <div class="col-sm-4">
-      <div style="color:#94A3B8;font-size:11px">ΛΗΞΗ</div>
+      <div style="color:#94A3B8;font-size:11px"><span data-i18n="pol_expiry">ΛΗΞΗ</span></div>
       <div class="fw-semibold" {% if pd.days_left is not none and pd.days_left <= 30 %}style="color:#DC2626"{% endif %}>
         {{ p.expiration_date | chi_date }}
-        {% if pd.days_left is not none %}<small>({{ pd.days_left }} ημ.)</small>{% endif %}
+        {% if pd.days_left is not none %}<small>({{ pd.days_left }} <span data-i18n="pol_days">ημ.</span>)</small>{% endif %}
       </div>
     </div>
     <div class="col-sm-4">
-      <div style="color:#94A3B8;font-size:11px">ΕΠΟΜΕΝΗ ΠΛΗΡΩΜΗ</div>
+      <div style="color:#94A3B8;font-size:11px"><span data-i18n="pol_next_payment">ΕΠΟΜΕΝΗ ΠΛΗΡΩΜΗ</span></div>
       {% if pd.next_pay %}
       <div class="fw-semibold">€{{ "{:,.2f}".format(pd.next_pay.amount) }} — {{ pd.next_pay.due_date | chi_date }}</div>
       {% else %}<div class="fw-semibold">—</div>{% endif %}
     </div>
     {% if p.coverage_details %}
     <div class="col-12">
-      <div style="color:#94A3B8;font-size:11px">ΚΑΛΥΨΕΙΣ</div>
+      <div style="color:#94A3B8;font-size:11px"><span data-i18n="pol_coverages">ΚΑΛΥΨΕΙΣ</span></div>
       <div style="font-size:12.5px">{{ p.coverage_details[:200] }}{% if p.coverage_details|length > 200 %}...{% endif %}</div>
     </div>
     {% endif %}
@@ -52,9 +52,9 @@
 
   {% if pd.payments %}
   <details class="mt-3">
-    <summary style="cursor:pointer;font-size:12.5px;color:#2E4BA3;font-weight:600">Ιστορικό Πληρωμών ({{ pd.payments|length }})</summary>
+    <summary style="cursor:pointer;font-size:12.5px;color:#2E4BA3;font-weight:600"><span data-i18n="pol_payment_history">Ιστορικό Πληρωμών</span> ({{ pd.payments|length }})</summary>
     <table class="chi-table mt-2" style="font-size:12px">
-      <thead><tr><th>Ημ. Λήξης</th><th>Ποσό</th><th>Κατάσταση</th><th>Πληρώθηκε</th></tr></thead>
+      <thead><tr><th data-i18n="pol_due_date">Ημ. Λήξης</th><th data-i18n="pol_amount">Ποσό</th><th data-i18n="pol_status">Κατάσταση</th><th data-i18n="pol_paid_on">Πληρώθηκε</th></tr></thead>
       <tbody>
         {% for pay in pd.payments %}
         <tr>
@@ -71,7 +71,7 @@
 </div>
 {% else %}
 <div class="chi-card text-center py-5" style="color:#94A3B8">
-  <i class="fas fa-file-contract fa-3x d-block mb-3"></i>Δεν υπάρχουν ασφαλιστήρια
+  <i class="fas fa-file-contract fa-3x d-block mb-3"></i><span data-i18n="pol_no_policies">Δεν υπάρχουν ασφαλιστήρια</span>
 </div>
 {% endfor %}
 {% endblock %}
