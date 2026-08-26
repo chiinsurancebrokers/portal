@@ -1506,6 +1506,8 @@ def agent_payments():
                 "pol_sector":   pol.sector.value if pol and pol.sector else "—",
                 "pol_agent":    pol.agent if pol else "—",
                 "pol_rf":       pol.payment_code if pol else "",
+                "pol_start":    pol.start_date.strftime("%d/%m/%Y") if pol and pol.start_date else "—",
+                "pol_expiry":   pol.expiration_date.strftime("%d/%m/%Y") if pol and pol.expiration_date else "—",
                 "client_id":    c.id if c else None,
                 "client_name":  c.name if c else "—",
                 "client_email": c.email if c else "",
