@@ -2878,12 +2878,15 @@ def _build_payment_email_html(client, policy, payment, bank_info, show_banks: bo
     due_raw      = pay_due_raw if pay_due_raw else start_raw
     expiry_str   = chi_date_filter(expiry_raw) if expiry_raw else "—"
     due_str      = chi_date_filter(due_raw) if due_raw else "—"
-    policy_type  = _g(policy, "policy_type")
-    provider     = _g(policy, "provider")
-    policy_num   = _g(policy, "policy_number")
-    payment_code = _g(policy, "payment_code")
-    coverage     = _g(policy, "coverage_details")
-    client_name  = _g(client, "name")
+    policy_type   = _g(policy, "policy_type")
+    provider      = _g(policy, "provider")
+    policy_num    = _g(policy, "policy_number")
+    payment_code  = _g(policy, "payment_code")
+    coverage      = _g(policy, "coverage_details")
+    license_plate = _g(policy, "license_plate")
+    start_raw_pol = _g(policy, "start_date")
+    start_str     = chi_date_filter(start_raw_pol) if start_raw_pol else ""
+    client_name   = _g(client, "name")
     amount       = _g(payment, "amount", 0) or 0
     if not isinstance(amount, (int, float)):
         try: amount = float(amount)
@@ -2994,9 +2997,12 @@ def _build_payment_email_html(client, policy, payment, bank_info, show_banks: bo
           <td style='padding:6px 0;font-size:13px'>{sector_name}</td>
         </tr>
         <tr style='border-top:1px solid #F1F5F9'>
-          <td style='padding:6px 0;color:#64748B;font-size:13px'>Λήξη</td>
-          <td style='padding:6px 0;font-size:13px'>{expiry_str}</td>
+          <td style='padding:6px 0;color:#64748B;font-size:13px'>Περίοδος Ασφάλισης</td>
+          <td style='padding:6px 0;font-size:13px;font-weight:600;color:#1B2B5E'>
+            {f"{start_str} &nbsp;→&nbsp; " if start_str else ""}{expiry_str}
+          </td>
         </tr>
+        {f"<tr style='border-top:1px solid #F1F5F9'><td style='padding:6px 0;color:#64748B;font-size:13px'>Πινακίδα</td><td style='padding:6px 0'><span style='background:#F1F5F9;border:1px solid #CBD5E1;border-radius:5px;padding:2px 10px;font-family:monospace;font-weight:700;font-size:14px;color:#1B2B5E;letter-spacing:2px'>{license_plate}</span></td></tr>" if license_plate else ""}
         {rf_html}
       </table>
     </div>
