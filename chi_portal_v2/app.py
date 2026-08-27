@@ -60,6 +60,55 @@ def _run_migrations():
 
 _run_migrations()
 
+# ── INSTALLMENT HELPER ─────────────────────────────────────────────────────────
+
+def _add_months(d, months):
+    """Add months to a date using stdlib only — no dateutil needed."""
+    import calendar
+    month = d.month - 1 + months
+    year  = d.year + month // 12
+    month = month % 12 + 1
+    day   = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _create_installments(db, policy, annual_premium):
+    """Create Payment installment records based on policy.payment_frequency.
+
+    Maps frequency → number of installments per year:
+      ANNUAL    → 1  installment  (full year, one payment)
+      SEMI      → 2  installments (every 6 months)
+      QUARTERLY → 4  installments (every 3 months)
+      MONTHLY   → 12 installments (every month)
+
+    Amount per installment = annual_premium / n_installments.
+    Due dates step forward from policy.start_date by the month interval.
+    """
+    freq = policy.payment_frequency
+    freq_map = {
+        m.PaymentFrequency.ANNUAL:    (1,  12),
+        m.PaymentFrequency.SEMI:      (2,   6),
+        m.PaymentFrequency.QUARTERLY: (4,   3),
+        m.PaymentFrequency.MONTHLY:   (12,  1),
+    }
+    n_installments, month_step = freq_map.get(freq, (1, 12))
+    installment_amount = round(annual_premium / n_installments, 2)
+
+    base_date = policy.start_date or policy.expiration_date or date.today()
+
+    for i in range(n_installments):
+        due = _add_months(base_date, month_step * i)
+        pay = m.Payment(
+            policy_id=policy.id,
+            amount=installment_amount,
+            due_date=due,
+            status=m.PaymentStatus.PENDING,
+        )
+        db.add(pay)
+
+    return n_installments, installment_amount
+
+
 ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png", "docx", "xlsx", "doc"}
 
 @app.template_filter("chi_date")
@@ -914,17 +963,13 @@ def agent_add_policy(client_id):
                     expiry_year=policy.expiration_date.year
                 )
                 db.add(li)
-            # Auto-create payment
+            # Auto-create installments based on payment_frequency
             if prem > 0:
-                pay = m.Payment(
-                    policy_id=policy.id,
-                    amount=prem,
-                    due_date=policy.expiration_date or date.today(),
-                    status=m.PaymentStatus.PENDING
-                )
-                db.add(pay)
+                n, amt = _create_installments(db, policy, prem)
             db.commit()
-            flash(f"✅ Συμβόλαιο {policy.policy_number or policy.policy_type} προστέθηκε.", "success")
+            freq_label = policy.payment_frequency.value if policy.payment_frequency else "Ετήσια"
+            installment_note = f" ({n}x €{amt:.2f}, {freq_label})" if prem > 0 else ""
+            flash(f"✅ Συμβόλαιο {policy.policy_number or policy.policy_type} προστέθηκε{installment_note}.", "success")
             return redirect(url_for("agent_client_detail", client_id=client_id))
         except Exception as e:
             db.rollback(); flash(f"Σφάλμα: {e}", "danger")
@@ -976,27 +1021,51 @@ def agent_edit_policy(policy_id):
             policy.hal_summary    = None   # clear cache
             policy.updated_date   = datetime.now()
 
-            synced_payments = 0
+            # Rebuild pending installments when premium or frequency changes
             unpaid = db.query(m.Payment).filter(
                 m.Payment.policy_id == policy.id,
                 m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
             ).all()
-            new_due = policy.start_date or policy.expiration_date
-            for pay in unpaid:
-                changed = False
-                if abs((pay.amount or 0) - prem) > 0.001:
-                    pay.amount = prem
-                    changed = True
-                if new_due and pay.due_date != new_due:
-                    pay.due_date = new_due
-                    changed = True
-                if changed:
-                    synced_payments += 1
-
-            db.commit()
-            if synced_payments:
-                flash(f"✅ Συμβόλαιο ενημερώθηκε. Ενημερώθηκαν επίσης {synced_payments} εκκρεμ. πληρωμ. (ασφάλιστρο €{prem:.2f}, ημ. {new_due.strftime('%d/%m/%Y') if new_due else '—'}).", "success")
+            if prem > 0 and unpaid:
+                # Check if we need to rebuild (premium or frequency changed)
+                expected_n, expected_amt = {
+                    m.PaymentFrequency.ANNUAL:    (1,  prem),
+                    m.PaymentFrequency.SEMI:      (2,  round(prem/2, 2)),
+                    m.PaymentFrequency.QUARTERLY: (4,  round(prem/4, 2)),
+                    m.PaymentFrequency.MONTHLY:   (12, round(prem/12, 2)),
+                }.get(policy.payment_frequency, (1, prem))
+                actual_n = len(unpaid)
+                amounts_match = all(abs((p.amount or 0) - expected_amt) < 0.02 for p in unpaid)
+                if actual_n != expected_n or not amounts_match:
+                    # Frequency or premium changed — delete pending and recreate
+                    for p in unpaid:
+                        db.delete(p)
+                    db.flush()
+                    n, amt = _create_installments(db, policy, prem)
+                    freq_label = policy.payment_frequency.value if policy.payment_frequency else ""
+                    db.commit()
+                    flash(f"✅ Συμβόλαιο ενημερώθηκε. Αναδημιουργήθηκαν {n} δόσεις (€{amt:.2f} {freq_label}).", "success")
+                else:
+                    # Same count & amounts — just update due dates if start_date changed
+                    new_base = policy.start_date or policy.expiration_date
+                    freq_steps = {
+                        m.PaymentFrequency.ANNUAL: 12, m.PaymentFrequency.SEMI: 6,
+                        m.PaymentFrequency.QUARTERLY: 3, m.PaymentFrequency.MONTHLY: 1,
+                    }
+                    step = freq_steps.get(policy.payment_frequency, 12)
+                    for i, pay in enumerate(sorted(unpaid, key=lambda p: p.due_date or date.today())):
+                        if new_base:
+                            pay.due_date = _add_months(new_base, step * i)
+                        pay.amount = expected_amt
+                    db.commit()
+                    flash(f"✅ Συμβόλαιο ενημερώθηκε ({actual_n} δόσεις ενημερώθηκαν).", "success")
+            elif prem > 0 and not unpaid:
+                # No pending payments yet — create from scratch
+                n, amt = _create_installments(db, policy, prem)
+                db.commit()
+                flash(f"✅ Συμβόλαιο ενημερώθηκε. Δημιουργήθηκαν {n} δόσεις (€{amt:.2f}).", "success")
             else:
+                db.commit()
                 flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
             return redirect(url_for("agent_client_detail", client_id=client.id))
         except Exception as e:
@@ -2749,15 +2818,9 @@ def agent_import():
                     )
                     db.add(li)
 
-                # Payment entry
+                # Payment installments based on payment_frequency
                 if premium > 0:
-                    pay = m.Payment(
-                        policy_id=policy.id,
-                        amount=premium,
-                        due_date=start_date or expiry_date or date.today(),  # start_date = payment due date
-                        status=m.PaymentStatus.PENDING,
-                    )
-                    db.add(pay)
+                    _create_installments(db, policy, premium)
 
             db.commit()
             flash(f"✅ Import ολοκληρώθηκε: {created_clients} νέοι πελάτες, {created_policies} συμβόλαια, {skipped} παραλείφθηκαν.", "success")
@@ -3325,8 +3388,8 @@ def agent_scanner_register():
             db.add(policy); db.flush()
             if expiry:
                 db.add(m.LixiariaEntry(policy_id=policy.id, expiry_month=expiry.month, expiry_year=expiry.year))
-            if prem > 0 and expiry:
-                db.add(m.Payment(policy_id=policy.id, amount=prem, due_date=parse_date(d.get('start_date')) or expiry or date.today(), status=m.PaymentStatus.PENDING))
+            if prem > 0:
+                _create_installments(db, policy, prem)
             db.commit()
             flash(f"✅ Συμβόλαιο καταχωρήθηκε για {client.name}", "success")
             return redirect(url_for("agent_client_detail", client_id=client.id))
