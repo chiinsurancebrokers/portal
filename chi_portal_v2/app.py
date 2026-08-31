@@ -1578,6 +1578,8 @@ def agent_payments():
                 "pol_start":    pol.start_date.strftime("%d/%m/%Y") if pol and pol.start_date else "—",
                 "pol_expiry":   pol.expiration_date.strftime("%d/%m/%Y") if pol and pol.expiration_date else "—",
                 "pol_plate":    pol.license_plate or "",
+                "pol_n_inst":   _pol_installment_count(pol),
+                "pay_inst_idx": _pay_installment_index(pay, pol, db),
                 "client_id":    c.id if c else None,
                 "client_name":  c.name if c else "—",
                 "client_email": c.email if c else "",
@@ -2880,6 +2882,32 @@ def agent_fix_import_data():
 # PAYMENT DUE-DATE AUDIT & FIX TOOL
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _pol_installment_count(policy):
+    """Expected number of installments based on payment frequency."""
+    if not policy:
+        return 1
+    return {
+        m.PaymentFrequency.ANNUAL:    1,
+        m.PaymentFrequency.SEMI:      2,
+        m.PaymentFrequency.QUARTERLY: 4,
+        m.PaymentFrequency.MONTHLY:   12,
+    }.get(policy.payment_frequency, 1)
+
+
+def _pay_installment_index(pay, policy, db):
+    """Return 1-based index of this payment among all pending/paid for the policy."""
+    if not policy:
+        return 1
+    all_pays = sorted(
+        db.query(m.Payment).filter_by(policy_id=policy.id).all(),
+        key=lambda p: (p.due_date or date.today(), p.id)
+    )
+    for i, p in enumerate(all_pays):
+        if p.id == pay.id:
+            return i + 1
+    return 1
+
+
 def _expected_due_dates(policy):
     """Return the list of expected due_dates for a policy based on its
     start_date and payment_frequency. Returns [] if data is insufficient."""
@@ -2994,13 +3022,9 @@ def agent_payments_fix():
             if not expected:
                 continue
 
-            pending = sorted(
-                db.query(m.Payment).filter(
-                    m.Payment.policy_id == pol.id,
-                    m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
-                ).all(),
-                key=lambda p: p.due_date or date.today()
-            )
+            annual_prem = pol.premium or 0
+            if not annual_prem:
+                continue
 
             freq_map = {
                 m.PaymentFrequency.ANNUAL:    (1,  12),
@@ -3009,29 +3033,27 @@ def agent_payments_fix():
                 m.PaymentFrequency.MONTHLY:   (12,  1),
             }
             n_expected, step = freq_map.get(pol.payment_frequency, (1, 12))
-            annual_prem = pol.premium or 0
-            inst_amt = round(annual_prem / n_expected, 2) if n_expected else annual_prem
+            inst_amt = round(annual_prem / n_expected, 2)
 
-            if len(pending) == n_expected:
-                # Right count — just fix the dates (and amounts if needed)
-                changed = 0
-                for i, pay in enumerate(pending):
-                    exp_date = expected[i]
-                    needs_fix = (pay.due_date != exp_date) or (abs((pay.amount or 0) - inst_amt) > 0.02)
-                    if needs_fix:
-                        pay.due_date = exp_date
-                        pay.amount   = inst_amt
-                        changed += 1
-                if changed:
-                    fixed_policies += 1
-                    fixed_payments += changed
-            else:
-                # Wrong count — delete pending and rebuild
-                for pay in pending:
-                    db.delete(pay)
-                db.flush()
-                _create_installments(db, pol, annual_prem)
+            pending = sorted(
+                db.query(m.Payment).filter(
+                    m.Payment.policy_id == pol.id,
+                    m.Payment.status.in_([m.PaymentStatus.PENDING,
+                                          m.PaymentStatus.OVERDUE])
+                ).all(),
+                key=lambda p: (p.due_date or date.today(), p.id)
+            )
+
+            # ALWAYS delete all pending first to avoid duplicate accumulation,
+            # then rebuild cleanly from the policy start_date.
+            for pay in pending:
+                db.delete(pay)
+            db.flush()
+
+            if pending:  # only count as rebuilt if there was something to fix
                 rebuilt_policies += 1
+
+            _create_installments(db, pol, annual_prem)
 
         db.commit()
         parts = []
@@ -3041,6 +3063,113 @@ def agent_payments_fix():
             parts.append(f"αναδημιουργήθηκαν δόσεις σε {rebuilt_policies} συμβόλαια")
         msg = " · ".join(parts) if parts else "Δεν βρέθηκαν διορθώσεις"
         flash(f"✅ Διόρθωση ολοκληρώθηκε: {msg}.", "success")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Σφάλμα: {e}", "danger")
+    finally:
+        db.close()
+    return redirect(url_for("agent_payments_audit"))
+
+
+@app.route("/agent/payment/<int:pay_id>/edit", methods=["GET", "POST"])
+@agent_required
+def agent_payment_edit(pay_id):
+    """Manual edit of a single payment installment — due_date, amount, status."""
+    db = m.get_session()
+    pay = db.query(m.Payment).get(pay_id)
+    if not pay:
+        db.close(); abort(404)
+    policy = db.query(m.Policy).get(pay.policy_id)
+    client = db.query(m.Client).get(policy.client_id) if policy else None
+
+    if request.method == "POST":
+        try:
+            action = request.form.get("action", "save")
+            if action == "delete":
+                db.delete(pay)
+                db.commit()
+                flash("🗑 Δόση διαγράφηκε.", "info")
+                db.close()
+                return redirect(url_for("agent_client_detail",
+                                        client_id=client.id if client else 0))
+            # Save edits
+            due_str = request.form.get("due_date", "")
+            if due_str:
+                pay.due_date = datetime.strptime(due_str, "%Y-%m-%d").date()
+            amt = request.form.get("amount", "")
+            if amt:
+                pay.amount = round(float(amt), 2)
+            new_status = request.form.get("status", "")
+            if new_status:
+                pay.status = m.PaymentStatus[new_status]
+                if pay.status == m.PaymentStatus.PAID and not pay.payment_date:
+                    pay.payment_date = date.today()
+                elif pay.status != m.PaymentStatus.PAID:
+                    pay.payment_date = None
+            pay.notes = request.form.get("notes", "")
+            db.commit()
+            flash("✅ Δόση ενημερώθηκε.", "success")
+            db.close()
+            return redirect(url_for("agent_client_detail",
+                                    client_id=client.id if client else 0))
+        except Exception as e:
+            db.rollback()
+            flash(f"❌ Σφάλμα: {e}", "danger")
+
+    # Count installment index for display
+    all_pays = sorted(
+        db.query(m.Payment).filter_by(policy_id=pay.policy_id).all(),
+        key=lambda p: p.due_date or date.today()
+    )
+    idx = next((i+1 for i, p in enumerate(all_pays) if p.id == pay_id), 1)
+    total = len(all_pays)
+
+    pay_d    = m.ser_payment(pay)
+    pol_d    = m.ser_policy(policy) if policy else {}
+    client_d = m.ser_client(client) if client else {}
+    db.close()
+    return render_template("agent/payment_edit.html",
+                           pay=pay_d, policy=pol_d, client=client_d,
+                           idx=idx, total=total,
+                           statuses=[s.name for s in m.PaymentStatus])
+
+
+@app.route("/agent/payments/cleanup", methods=["POST"])
+@agent_required
+def agent_payments_cleanup():
+    """Remove duplicate PENDING installments — keeps the earliest per slot."""
+    db = m.get_session()
+    scope = get_agent_scope()
+    deleted_total = 0
+    try:
+        q = db.query(m.Policy)
+        if scope:
+            q = q.filter(m.Policy.agent == scope)
+        for pol in q.all():
+            freq_map = {
+                m.PaymentFrequency.ANNUAL:    1,
+                m.PaymentFrequency.SEMI:      2,
+                m.PaymentFrequency.QUARTERLY: 4,
+                m.PaymentFrequency.MONTHLY:   12,
+            }
+            n_expected = freq_map.get(pol.payment_frequency, 1)
+            pending = sorted(
+                db.query(m.Payment).filter(
+                    m.Payment.policy_id == pol.id,
+                    m.Payment.status.in_([m.PaymentStatus.PENDING,
+                                          m.PaymentStatus.OVERDUE])
+                ).all(),
+                key=lambda p: (p.due_date or date.today(), p.id)
+            )
+            if len(pending) <= n_expected:
+                continue
+            # Keep first n_expected, delete the rest
+            to_delete = pending[n_expected:]
+            for p in to_delete:
+                db.delete(p)
+                deleted_total += 1
+        db.commit()
+        flash(f"✅ Εκκαθάριση: διαγράφηκαν {deleted_total} διπλότυπες δόσεις.", "success")
     except Exception as e:
         db.rollback()
         flash(f"❌ Σφάλμα: {e}", "danger")
