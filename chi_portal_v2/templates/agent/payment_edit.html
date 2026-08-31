@@ -1,0 +1,111 @@
+{% extends "base.html" %}
+{% block title %}Επεξεργασία Δόσης{% endblock %}
+{% block content %}
+
+<div class="mb-4">
+  <a href="{{ url_for('agent_client_detail', client_id=client.id) }}"
+     style="font-size:13px;color:var(--chi-muted);text-decoration:none">
+    ← {{ client.name }}
+  </a>
+  <h4 style="color:var(--chi-navy);margin:8px 0 2px">
+    Επεξεργασία Δόσης {{ idx }} / {{ total }}
+  </h4>
+  <div style="font-size:13px;color:var(--chi-muted)">
+    {{ policy.policy_type }} · {{ policy.provider }} · #{{ policy.policy_number }}
+  </div>
+</div>
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for cat, msg in messages %}
+  <div class="alert alert-{{ 'success' if cat == 'success' else 'danger' }} alert-dismissible fade show">
+    {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+  </div>
+  {% endfor %}
+{% endwith %}
+
+<!-- Policy info card -->
+<div style="background:#F8FAFC;border:1px solid #E2E8F0;border-radius:12px;padding:16px 20px;margin-bottom:24px;font-size:13px">
+  <div class="row g-2">
+    <div class="col-6 col-md-3">
+      <div style="color:#94A3B8;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Έναρξη</div>
+      <div style="font-weight:600;color:#1B2B5E">{{ policy.start_date | chi_date if policy.start_date else '—' }}</div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div style="color:#94A3B8;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Λήξη</div>
+      <div style="font-weight:600;color:#1B2B5E">{{ policy.expiration_date | chi_date if policy.expiration_date else '—' }}</div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div style="color:#94A3B8;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Συχνότητα</div>
+      <div style="font-weight:600;color:#1B2B5E">{{ policy.payment_frequency or '—' }}</div>
+    </div>
+    <div class="col-6 col-md-3">
+      <div style="color:#94A3B8;font-size:11px;text-transform:uppercase;letter-spacing:.5px">Ετήσιο Ασφάλιστρο</div>
+      <div style="font-weight:600;color:#1B2B5E">€{{ "%.2f"|format(policy.premium or 0) }}</div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit form -->
+<div style="background:white;border-radius:12px;padding:28px;box-shadow:0 1px 6px rgba(0,0,0,0.07)">
+  <form method="POST">
+
+    <div class="row g-3 mb-3">
+      <div class="col-md-4">
+        <label class="form-label fw-semibold" style="font-size:12px;color:#64748B;text-transform:uppercase">
+          Ημερομηνία Δόσης *
+        </label>
+        <input type="date" name="due_date" class="form-control"
+               value="{{ pay.due_date }}" required>
+        <div style="font-size:11px;color:#94A3B8;margin-top:4px">
+          Πότε πρέπει να πληρωθεί η δόση
+        </div>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-semibold" style="font-size:12px;color:#64748B;text-transform:uppercase">
+          Ποσό Δόσης (€) *
+        </label>
+        <input type="number" name="amount" class="form-control" step="0.01" min="0"
+               value="{{ "%.2f"|format(pay.amount or 0) }}" required>
+      </div>
+      <div class="col-md-3">
+        <label class="form-label fw-semibold" style="font-size:12px;color:#64748B;text-transform:uppercase">
+          Κατάσταση
+        </label>
+        <select name="status" class="form-select">
+          {% for s in statuses %}
+          <option value="{{ s }}" {% if s == pay.status %}selected{% endif %}>{{ s }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="mb-4">
+      <label class="form-label fw-semibold" style="font-size:12px;color:#64748B;text-transform:uppercase">
+        Σημειώσεις
+      </label>
+      <textarea name="notes" class="form-control" rows="2"
+                placeholder="Προαιρετικές σημειώσεις...">{{ pay.notes or '' }}</textarea>
+    </div>
+
+    <div class="d-flex gap-2 justify-content-between">
+      <button type="submit" name="action" value="save" class="btn"
+              style="background:var(--chi-navy);color:white;padding:10px 28px">
+        💾 Αποθήκευση
+      </button>
+
+      <div class="d-flex gap-2">
+        <a href="{{ url_for('agent_client_detail', client_id=client.id) }}"
+           class="btn btn-outline-secondary">Ακύρωση</a>
+
+        <button type="submit" name="action" value="delete"
+                class="btn btn-outline-danger"
+                onclick="return confirm('Να διαγραφεί αυτή η δόση οριστικά;')">
+          🗑 Διαγραφή Δόσης
+        </button>
+      </div>
+    </div>
+
+  </form>
+</div>
+
+{% endblock %}
