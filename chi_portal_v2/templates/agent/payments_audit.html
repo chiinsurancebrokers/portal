@@ -10,14 +10,23 @@
   </div>
   <div class="d-flex gap-2">
     <a href="{{ url_for('agent_payments') }}" class="btn btn-sm btn-outline-secondary">← Πληρωμές</a>
+    <div class="d-flex gap-2">
     {% if issues %}
-    <form method="POST" action="{{ url_for('agent_payments_fix') }}" onsubmit="return confirm('Να διορθωθούν ΟΛΕΣ οι λανθασμένες ημερομηνίες αυτόματα;')">
+    <form method="POST" action="{{ url_for('agent_payments_cleanup') }}"
+          onsubmit="return confirm('Να διαγραφούν ΟΛΕΣ οι διπλότυπες δόσεις; Θα κρατηθούν μόνο οι πρώτες ανά συμβόλαιο.')">
+      <button type="submit" class="btn btn-sm" style="background:#DC2626;color:white">
+        🗑 Εκκαθάριση Διπλοτύπων
+      </button>
+    </form>
+    <form method="POST" action="{{ url_for('agent_payments_fix') }}"
+          onsubmit="return confirm('Να αναδημιουργηθούν οι δόσεις με τις σωστές ημερομηνίες;')">
       <input type="hidden" name="fix_all" value="1">
-      <button type="submit" class="btn btn-sm btn-danger">
-        ⚡ Διόρθωση Όλων ({{ total }})
+      <button type="submit" class="btn btn-sm" style="background:#1B2B5E;color:#C9A96E">
+        ⚡ Διόρθωση Ημερομηνιών ({{ total }})
       </button>
     </form>
     {% endif %}
+    </div>
   </div>
 </div>
 
