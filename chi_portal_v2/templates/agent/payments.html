@@ -1,6 +1,11 @@
 {% extends "base.html" %}
 {% block title %}Πληρωμές — CHI{% endblock %}
 {% block page_title %}<i class="fas fa-credit-card me-2" style="color:#C9A96E"></i>Πληρωμές{% endblock %}
+{% block topbar_actions %}
+<a href="{{ url_for('agent_payments_audit') }}" class="btn btn-sm" style="background:#FEF3C7;color:#92400E;border:1px solid #F59E0B;font-size:12px">
+  🔍 Έλεγχος Ημερομηνιών
+</a>
+{% endblock %}
 {% block content %}
 
 <!-- Filters -->
