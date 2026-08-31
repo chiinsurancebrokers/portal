@@ -2875,6 +2875,179 @@ def agent_fix_import_data():
         db.close()
     return redirect(url_for("agent_clients"))
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+# PAYMENT DUE-DATE AUDIT & FIX TOOL
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _expected_due_dates(policy):
+    """Return the list of expected due_dates for a policy based on its
+    start_date and payment_frequency. Returns [] if data is insufficient."""
+    if not policy.start_date and not policy.expiration_date:
+        return []
+    freq_map = {
+        m.PaymentFrequency.ANNUAL:    (1,  12),
+        m.PaymentFrequency.SEMI:      (2,   6),
+        m.PaymentFrequency.QUARTERLY: (4,   3),
+        m.PaymentFrequency.MONTHLY:   (12,  1),
+    }
+    n, step = freq_map.get(policy.payment_frequency, (1, 12))
+    base = policy.start_date or policy.expiration_date
+    return [_add_months(base, step * i) for i in range(n)]
+
+
+@app.route("/agent/payments/audit")
+@agent_required
+def agent_payments_audit():
+    """Show all payments whose due_date doesn't match the policy schedule."""
+    db = m.get_session()
+    scope = get_agent_scope()
+    try:
+        q = db.query(m.Payment).join(m.Policy).filter(
+            m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
+        )
+        if scope:
+            q = q.filter(m.Policy.agent == scope)
+        payments = q.order_by(m.Policy.id, m.Payment.due_date).all()
+
+        issues = []
+        seen_policy = {}   # policy_id → list of (payment, expected_date)
+
+        # Group by policy
+        from itertools import groupby
+        policy_ids = list({pay.policy_id for pay in payments})
+        for pid in policy_ids:
+            pol = db.query(m.Policy).get(pid)
+            if not pol:
+                continue
+            pol_pays = sorted(
+                [p for p in payments if p.policy_id == pid],
+                key=lambda p: p.due_date or date.today()
+            )
+            expected = _expected_due_dates(pol)
+            if not expected:
+                continue
+
+            client = db.query(m.Client).get(pol.client_id)
+
+            # Check count mismatch
+            count_ok = len(pol_pays) == len(expected)
+            # Check each date
+            date_issues = []
+            for i, pay in enumerate(pol_pays):
+                exp_date = expected[i] if i < len(expected) else None
+                if exp_date and pay.due_date != exp_date:
+                    date_issues.append({
+                        "pay_id":    pay.id,
+                        "current":   pay.due_date.strftime("%d/%m/%Y") if pay.due_date else "—",
+                        "expected":  exp_date.strftime("%d/%m/%Y"),
+                        "amount":    pay.amount,
+                        "status":    pay.status.value,
+                    })
+
+            if date_issues or not count_ok:
+                freq_label = pol.payment_frequency.value if pol.payment_frequency else "—"
+                issues.append({
+                    "policy_id":    pol.id,
+                    "policy_type":  pol.policy_type or "—",
+                    "policy_num":   pol.policy_number or "—",
+                    "provider":     pol.provider or "—",
+                    "client_name":  client.name if client else "—",
+                    "client_id":    client.id if client else None,
+                    "start_date":   pol.start_date.strftime("%d/%m/%Y") if pol.start_date else "—",
+                    "expiry_date":  pol.expiration_date.strftime("%d/%m/%Y") if pol.expiration_date else "—",
+                    "frequency":    freq_label,
+                    "expected_n":   len(expected),
+                    "actual_n":     len(pol_pays),
+                    "count_ok":     count_ok,
+                    "date_issues":  date_issues,
+                })
+
+        return render_template("agent/payments_audit.html",
+                               issues=issues, total=len(issues))
+    finally:
+        db.close()
+
+
+@app.route("/agent/payments/fix", methods=["POST"])
+@agent_required
+def agent_payments_fix():
+    """Fix due_dates for selected policies (or all if none selected)."""
+    db = m.get_session()
+    scope = get_agent_scope()
+    policy_ids_raw = request.form.getlist("policy_ids")
+    fix_all = request.form.get("fix_all") == "1"
+    try:
+        q = db.query(m.Policy)
+        if scope:
+            q = q.filter(m.Policy.agent == scope)
+        if policy_ids_raw and not fix_all:
+            q = q.filter(m.Policy.id.in_([int(x) for x in policy_ids_raw if x.isdigit()]))
+        policies = q.all()
+
+        fixed_policies = 0
+        fixed_payments = 0
+        rebuilt_policies = 0
+
+        for pol in policies:
+            expected = _expected_due_dates(pol)
+            if not expected:
+                continue
+
+            pending = sorted(
+                db.query(m.Payment).filter(
+                    m.Payment.policy_id == pol.id,
+                    m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
+                ).all(),
+                key=lambda p: p.due_date or date.today()
+            )
+
+            freq_map = {
+                m.PaymentFrequency.ANNUAL:    (1,  12),
+                m.PaymentFrequency.SEMI:      (2,   6),
+                m.PaymentFrequency.QUARTERLY: (4,   3),
+                m.PaymentFrequency.MONTHLY:   (12,  1),
+            }
+            n_expected, step = freq_map.get(pol.payment_frequency, (1, 12))
+            annual_prem = pol.premium or 0
+            inst_amt = round(annual_prem / n_expected, 2) if n_expected else annual_prem
+
+            if len(pending) == n_expected:
+                # Right count — just fix the dates (and amounts if needed)
+                changed = 0
+                for i, pay in enumerate(pending):
+                    exp_date = expected[i]
+                    needs_fix = (pay.due_date != exp_date) or (abs((pay.amount or 0) - inst_amt) > 0.02)
+                    if needs_fix:
+                        pay.due_date = exp_date
+                        pay.amount   = inst_amt
+                        changed += 1
+                if changed:
+                    fixed_policies += 1
+                    fixed_payments += changed
+            else:
+                # Wrong count — delete pending and rebuild
+                for pay in pending:
+                    db.delete(pay)
+                db.flush()
+                _create_installments(db, pol, annual_prem)
+                rebuilt_policies += 1
+
+        db.commit()
+        parts = []
+        if fixed_payments:
+            parts.append(f"{fixed_payments} πληρωμές σε {fixed_policies} συμβόλαια")
+        if rebuilt_policies:
+            parts.append(f"αναδημιουργήθηκαν δόσεις σε {rebuilt_policies} συμβόλαια")
+        msg = " · ".join(parts) if parts else "Δεν βρέθηκαν διορθώσεις"
+        flash(f"✅ Διόρθωση ολοκληρώθηκε: {msg}.", "success")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Σφάλμα: {e}", "danger")
+    finally:
+        db.close()
+    return redirect(url_for("agent_payments_audit"))
+
 # ══════════════════════════════════════════════════════════════════════════════
 # PAYMENT NOTIFICATION EMAIL SYSTEM
 # ══════════════════════════════════════════════════════════════════════════════
