@@ -35,7 +35,7 @@
       </select>
     </div>
     <div class="col-md-2">
-      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Μήνας Λήξης</label>
+      <label class="form-label fw-semibold" style="font-size:11px;color:#64748B;text-transform:uppercase">Μήνας Δόσης</label>
       <select name="month" class="form-select form-select-sm">
         <option value="">Όλοι</option>
         {% for m_num in months %}
@@ -85,7 +85,7 @@
       <thead>
         <tr>
           <th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Πάροχος</th>
-          <th>Κλάδος</th><th>Agent</th><th style="width:52px">Δόση</th><th>Ποσό</th>
+          <th>Κλάδος</th><th>Agent</th><th style="min-width:90px">Δόση / Μήνας</th><th>Ποσό</th>
           <th>Περίοδος Ασφάλισης</th><th>Κατάσταση</th><th>Ενέργειες</th>
         </tr>
       </thead>
@@ -107,12 +107,17 @@
           <td style="font-size:12px;color:#64748B">{{ r.pol_provider }}</td>
           <td><span class="status-badge" style="background:#EEF2FF;color:#3730A3;font-size:10px">{{ r.pol_sector }}</span></td>
           <td style="font-size:12px;color:#94A3B8">{{ r.pol_agent }}</td>
-          <td style="font-size:11px;color:#94A3B8;white-space:nowrap">
+          <td style="font-size:11px;white-space:nowrap">
             {% if r.pol_n_inst and r.pol_n_inst > 1 %}
-            <span style="background:#EEF2FF;color:#3730A3;border-radius:10px;padding:2px 7px;font-weight:700">
-              {{ r.pay_inst_idx }}/{{ r.pol_n_inst }}
-            </span>
-            {% else %}—{% endif %}
+            <div>
+              <span style="background:#EEF2FF;color:#3730A3;border-radius:8px;padding:2px 6px;font-weight:700;font-size:10px">
+                {{ r.pay_inst_idx }}/{{ r.pol_n_inst }}
+              </span>
+            </div>
+            {% endif %}
+            <div style="color:#1B2B5E;font-weight:600;margin-top:2px;font-size:12px">
+              {{ r.pay_month_lbl }}
+            </div>
           </td>
           <td class="fw-bold" style="color:#1B2B5E;font-size:14px">€{{ "%.2f"|format(r.pay_amount) }}</td>
           <td style="font-size:12px;white-space:nowrap">
