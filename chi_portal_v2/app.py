@@ -108,6 +108,55 @@ def _create_installments(db, policy, annual_premium):
 
     return n_installments, installment_amount
 
+# ── INSTALLMENT ENFORCEMENT ────────────────────────────────────────────────────
+
+FREQ_MAX = {
+    "ANNUAL":    1,
+    "SEMI":      2,
+    "QUARTERLY": 4,
+    "MONTHLY":   12,
+}
+
+def _enforce_installments(db, policy, *, rebuild=True):
+    """Ensure the number of PENDING/OVERDUE installments exactly matches
+    what the policy's payment_frequency allows.
+
+    If rebuild=True (default): delete all pending and recreate cleanly.
+    If rebuild=False: only delete excess ones (keep the earliest N).
+
+    Returns (action, n_deleted, n_created) for logging.
+    """
+    freq_name = policy.payment_frequency.name if policy.payment_frequency else "ANNUAL"
+    max_n     = FREQ_MAX.get(freq_name, 1)
+    annual    = policy.premium or 0
+
+    pending = sorted(
+        db.query(m.Payment).filter(
+            m.Payment.policy_id == policy.id,
+            m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
+        ).all(),
+        key=lambda p: (p.due_date or date.today(), p.id)
+    )
+
+    n_pending = len(pending)
+
+    if n_pending == max_n and not rebuild:
+        return ("ok", 0, 0)
+
+    if rebuild or n_pending != max_n:
+        # Delete ALL pending and recreate
+        for p in pending:
+            db.delete(p)
+        db.flush()
+        if annual > 0:
+            n, _ = _create_installments(db, policy, annual)
+        else:
+            n = 0
+        return ("rebuilt", n_pending, n)
+
+    return ("ok", 0, 0)
+
+
 
 ALLOWED_EXTENSIONS = {"pdf", "jpg", "jpeg", "png", "docx", "xlsx", "doc"}
 
@@ -720,6 +769,11 @@ def agent_client_detail(client_id):
         pol_data_d = []
         for pd in pol_data:
             p = pd["policy"]
+            freq_name  = p.payment_frequency.name if p.payment_frequency else "ANNUAL"
+            max_n      = FREQ_MAX.get(freq_name, 1)
+            pending_n  = sum(1 for pay in pd["payments"]
+                             if pay.status in (m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE))
+            inst_ok    = (pending_n == max_n) or (pending_n == 0)
             pol_data_d.append({
                 "policy":       m.ser_policy(p),
                 "payments":     [m.ser_payment(pay) for pay in pd["payments"]],
@@ -727,6 +781,9 @@ def agent_client_detail(client_id):
                 "overdue":      [m.ser_payment(pay) for pay in pd["overdue"]],
                 "days_left":    pd["days_left"],
                 "commission":   pd["commission"],
+                "max_installments": max_n,
+                "pending_count":    pending_n,
+                "installments_ok":  inst_ok,
             })
         sectors_d = [{"name": s.name, "value": s.value} for s in m.PolicySector]
 
@@ -1021,51 +1078,15 @@ def agent_edit_policy(policy_id):
             policy.hal_summary    = None   # clear cache
             policy.updated_date   = datetime.now()
 
-            # Rebuild pending installments when premium or frequency changes
-            unpaid = db.query(m.Payment).filter(
-                m.Payment.policy_id == policy.id,
-                m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
-            ).all()
-            if prem > 0 and unpaid:
-                # Check if we need to rebuild (premium or frequency changed)
-                expected_n, expected_amt = {
-                    m.PaymentFrequency.ANNUAL:    (1,  prem),
-                    m.PaymentFrequency.SEMI:      (2,  round(prem/2, 2)),
-                    m.PaymentFrequency.QUARTERLY: (4,  round(prem/4, 2)),
-                    m.PaymentFrequency.MONTHLY:   (12, round(prem/12, 2)),
-                }.get(policy.payment_frequency, (1, prem))
-                actual_n = len(unpaid)
-                amounts_match = all(abs((p.amount or 0) - expected_amt) < 0.02 for p in unpaid)
-                if actual_n != expected_n or not amounts_match:
-                    # Frequency or premium changed — delete pending and recreate
-                    for p in unpaid:
-                        db.delete(p)
-                    db.flush()
-                    n, amt = _create_installments(db, policy, prem)
-                    freq_label = policy.payment_frequency.value if policy.payment_frequency else ""
-                    db.commit()
-                    flash(f"✅ Συμβόλαιο ενημερώθηκε. Αναδημιουργήθηκαν {n} δόσεις (€{amt:.2f} {freq_label}).", "success")
-                else:
-                    # Same count & amounts — just update due dates if start_date changed
-                    new_base = policy.start_date or policy.expiration_date
-                    freq_steps = {
-                        m.PaymentFrequency.ANNUAL: 12, m.PaymentFrequency.SEMI: 6,
-                        m.PaymentFrequency.QUARTERLY: 3, m.PaymentFrequency.MONTHLY: 1,
-                    }
-                    step = freq_steps.get(policy.payment_frequency, 12)
-                    for i, pay in enumerate(sorted(unpaid, key=lambda p: p.due_date or date.today())):
-                        if new_base:
-                            pay.due_date = _add_months(new_base, step * i)
-                        pay.amount = expected_amt
-                    db.commit()
-                    flash(f"✅ Συμβόλαιο ενημερώθηκε ({actual_n} δόσεις ενημερώθηκαν).", "success")
-            elif prem > 0 and not unpaid:
-                # No pending payments yet — create from scratch
-                n, amt = _create_installments(db, policy, prem)
-                db.commit()
-                flash(f"✅ Συμβόλαιο ενημερώθηκε. Δημιουργήθηκαν {n} δόσεις (€{amt:.2f}).", "success")
+            # Enforce correct installment count & dates whenever policy is saved
+            action, n_del, n_new = _enforce_installments(db, policy, rebuild=True)
+            db.commit()
+            freq_label = policy.payment_frequency.value if policy.payment_frequency else ""
+            max_n = FREQ_MAX.get(policy.payment_frequency.name if policy.payment_frequency else "ANNUAL", 1)
+            if action == "rebuilt" and prem > 0:
+                inst_amt = round(prem / max_n, 2)
+                flash(f"✅ Συμβόλαιο ενημερώθηκε. {max_n} δόσεις {freq_label} (€{inst_amt:.2f} η καθεμία).", "success")
             else:
-                db.commit()
                 flash("✅ Συμβόλαιο ενημερώθηκε.", "success")
             return redirect(url_for("agent_client_detail", client_id=client.id))
         except Exception as e:
@@ -3018,42 +3039,12 @@ def agent_payments_fix():
         rebuilt_policies = 0
 
         for pol in policies:
-            expected = _expected_due_dates(pol)
-            if not expected:
+            if not pol.premium:
                 continue
-
-            annual_prem = pol.premium or 0
-            if not annual_prem:
-                continue
-
-            freq_map = {
-                m.PaymentFrequency.ANNUAL:    (1,  12),
-                m.PaymentFrequency.SEMI:      (2,   6),
-                m.PaymentFrequency.QUARTERLY: (4,   3),
-                m.PaymentFrequency.MONTHLY:   (12,  1),
-            }
-            n_expected, step = freq_map.get(pol.payment_frequency, (1, 12))
-            inst_amt = round(annual_prem / n_expected, 2)
-
-            pending = sorted(
-                db.query(m.Payment).filter(
-                    m.Payment.policy_id == pol.id,
-                    m.Payment.status.in_([m.PaymentStatus.PENDING,
-                                          m.PaymentStatus.OVERDUE])
-                ).all(),
-                key=lambda p: (p.due_date or date.today(), p.id)
-            )
-
-            # ALWAYS delete all pending first to avoid duplicate accumulation,
-            # then rebuild cleanly from the policy start_date.
-            for pay in pending:
-                db.delete(pay)
-            db.flush()
-
-            if pending:  # only count as rebuilt if there was something to fix
+            action, n_del, n_new = _enforce_installments(db, pol, rebuild=True)
+            if action == "rebuilt":
                 rebuilt_policies += 1
-
-            _create_installments(db, pol, annual_prem)
+                fixed_payments += n_del
 
         db.commit()
         parts = []
@@ -3145,37 +3136,46 @@ def agent_payments_cleanup():
         q = db.query(m.Policy)
         if scope:
             q = q.filter(m.Policy.agent == scope)
+        rebuilt_total = 0
         for pol in q.all():
-            freq_map = {
-                m.PaymentFrequency.ANNUAL:    1,
-                m.PaymentFrequency.SEMI:      2,
-                m.PaymentFrequency.QUARTERLY: 4,
-                m.PaymentFrequency.MONTHLY:   12,
-            }
-            n_expected = freq_map.get(pol.payment_frequency, 1)
-            pending = sorted(
-                db.query(m.Payment).filter(
-                    m.Payment.policy_id == pol.id,
-                    m.Payment.status.in_([m.PaymentStatus.PENDING,
-                                          m.PaymentStatus.OVERDUE])
-                ).all(),
-                key=lambda p: (p.due_date or date.today(), p.id)
-            )
-            if len(pending) <= n_expected:
-                continue
-            # Keep first n_expected, delete the rest
-            to_delete = pending[n_expected:]
-            for p in to_delete:
-                db.delete(p)
-                deleted_total += 1
+            action, n_del, n_new = _enforce_installments(db, pol, rebuild=True)
+            if action == "rebuilt":
+                deleted_total += n_del
+                rebuilt_total += 1
         db.commit()
-        flash(f"✅ Εκκαθάριση: διαγράφηκαν {deleted_total} διπλότυπες δόσεις.", "success")
+        flash(f"✅ Εκκαθάριση: {rebuilt_total} συμβόλαια ενημερώθηκαν, {deleted_total} λανθασμένες δόσεις αντικαταστάθηκαν.", "success")
     except Exception as e:
         db.rollback()
         flash(f"❌ Σφάλμα: {e}", "danger")
     finally:
         db.close()
     return redirect(url_for("agent_payments_audit"))
+
+
+@app.route("/agent/policy/<int:policy_id>/fix-installments", methods=["POST"])
+@agent_required
+def agent_fix_policy_installments(policy_id):
+    """Fix installments for a single policy — callable from client detail page."""
+    db = m.get_session()
+    pol = db.query(m.Policy).get(policy_id)
+    if not pol:
+        db.close(); abort(404)
+    client_id = pol.client_id
+    try:
+        action, n_del, n_new = _enforce_installments(db, pol, rebuild=True)
+        db.commit()
+        freq_label = pol.payment_frequency.value if pol.payment_frequency else ""
+        max_n = FREQ_MAX.get(pol.payment_frequency.name if pol.payment_frequency else "ANNUAL", 1)
+        if n_del or n_new:
+            flash(f"✅ Δόσεις διορθώθηκαν: {n_del} διαγράφηκαν → {n_new} δημιουργήθηκαν ({freq_label}, max {max_n}).", "success")
+        else:
+            flash(f"✅ Δόσεις ήταν ήδη σωστές ({max_n} {freq_label}).", "info")
+    except Exception as e:
+        db.rollback()
+        flash(f"❌ Σφάλμα: {e}", "danger")
+    finally:
+        db.close()
+    return redirect(url_for("agent_client_detail", client_id=client_id))
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAYMENT NOTIFICATION EMAIL SYSTEM
