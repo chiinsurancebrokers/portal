@@ -135,19 +135,21 @@ FREQ_MAX = {
 }
 
 def _enforce_installments(db, policy, *, force_rebuild=False):
-    """Ensure pending installments match payment_frequency rules.
+    """Ensure total installments (PAID + PENDING) match payment_frequency.
 
-    Rules (in order):
-    1. If count is already correct AND force_rebuild=False → do nothing (PAID
-       payments are never touched regardless).
-    2. If there are TOO MANY pending → delete the excess (keep earliest N).
-    3. If there are TOO FEW pending AND no PAID payments exist yet → rebuild all.
-    4. If there are TOO FEW pending AND some are already PAID → add only the
-       missing future installments so we don't lose payment history.
-    5. If force_rebuild=True → delete all pending and recreate (admin action only).
+    The key invariant: n_paid + n_pending == max_n (NOT just n_pending == max_n).
+    This prevents the bug where PAID payments are ignored and extra PENDING ones
+    are created on top of them, producing duplicates.
 
+    Rules:
+    1. total (paid+pending) == max_n AND force_rebuild=False → only fix amounts
+    2. force_rebuild=True → delete all PENDING, recreate (max_n - n_paid) new ones
+    3. total > max_n → trim excess PENDING from the end (keep earliest)
+    4. total < max_n AND no PAID → rebuild all from scratch
+    5. total < max_n AND some PAID → append only the missing future installments
+
+    PAID payments are NEVER deleted under any circumstance.
     Returns (action, n_deleted, n_created).
-    PAID payments are NEVER deleted.
     """
     freq_name = policy.payment_frequency.name if policy.payment_frequency else "ANNUAL"
     max_n     = FREQ_MAX.get(freq_name, 1)
@@ -168,10 +170,13 @@ def _enforce_installments(db, policy, *, force_rebuild=False):
 
     n_pending = len(pending)
     n_paid    = len(paid)
+    total     = n_paid + n_pending          # THE correct total to compare against max_n
+    # How many new PENDING slots are still needed
+    pending_needed = max(0, max_n - n_paid)
 
-    # ── Case 1: already correct count, no force ────────────────────────────────
-    if n_pending == max_n and not force_rebuild:
-        # Still update amounts if premium changed, but keep due_dates
+    # ── Case 1: already correct, no force ─────────────────────────────────────
+    if total == max_n and not force_rebuild:
+        # Fix amounts only if premium changed — never touch due_dates or count
         changed = 0
         for pay in pending:
             if abs((pay.amount or 0) - inst_amt) > 0.02:
@@ -179,55 +184,73 @@ def _enforce_installments(db, policy, *, force_rebuild=False):
                 changed += 1
         return ("amounts_fixed" if changed else "ok", 0, 0)
 
-    # ── Case 5: force_rebuild (admin tool) ─────────────────────────────────────
+    # ── Case 2: force_rebuild (admin tool) ────────────────────────────────────
     if force_rebuild:
         for p in pending:
             db.delete(p)
         db.flush()
         n = 0
-        if annual > 0:
-            n, _ = _create_installments(db, policy, annual)
-        return ("rebuilt", n_pending, n)
-
-    # ── Case 2: too many pending → delete excess, keep earliest max_n ──────────
-    if n_pending > max_n:
-        to_delete = pending[max_n:]   # sorted by due_date, keep first N
-        for p in to_delete:
-            db.delete(p)
-        # Fix amounts on the ones we kept
-        for pay in pending[:max_n]:
-            if abs((pay.amount or 0) - inst_amt) > 0.02:
-                pay.amount = inst_amt
-        return ("trimmed", len(to_delete), 0)
-
-    # ── Case 3 & 4: too few pending ─────────────────────────────────────────────
-    if n_pending < max_n and annual > 0:
-        if n_paid == 0:
-            # No payment history — safe to rebuild from scratch
-            for p in pending:
-                db.delete(p)
-            db.flush()
-            n, _ = _create_installments(db, policy, annual)
-            return ("rebuilt", n_pending, n)
-        else:
-            # There are PAID installments — only add missing future ones
-            # Find last paid due_date to anchor the next ones
-            all_pays = sorted(
-                paid + pending,
-                key=lambda p: (p.due_date or date.today(), p.id)
-            )
+        if annual > 0 and pending_needed > 0:
+            # Create only the remaining slots (after paid ones)
             freq_steps = {
                 m.PaymentFrequency.ANNUAL: 12, m.PaymentFrequency.SEMI: 6,
                 m.PaymentFrequency.QUARTERLY: 3, m.PaymentFrequency.MONTHLY: 1,
             }
             step = freq_steps.get(policy.payment_frequency, 12)
-            # We have (n_paid + n_pending) installments total; add the missing ones
-            existing_total = n_paid + n_pending
-            missing = max_n - existing_total
-            if missing <= 0:
-                return ("ok", 0, 0)
+            base = policy.start_date or policy.expiration_date or date.today()
+            for i in range(n_paid, max_n):   # start from after paid slots
+                due = _add_months(base, step * i)
+                db.add(m.Payment(
+                    policy_id=policy.id,
+                    amount=inst_amt,
+                    due_date=due,
+                    status=m.PaymentStatus.PENDING,
+                ))
+                n += 1
+        return ("rebuilt", n_pending, n)
+
+    # ── Case 3: too many (paid+pending > max_n) → trim excess PENDING ─────────
+    if total > max_n:
+        # Keep only (max_n - n_paid) pending, delete the rest from the end
+        keep = pending_needed
+        to_delete = pending[keep:]
+        for p in to_delete:
+            db.delete(p)
+        for pay in pending[:keep]:
+            if abs((pay.amount or 0) - inst_amt) > 0.02:
+                pay.amount = inst_amt
+        return ("trimmed", len(to_delete), 0)
+
+    # ── Case 4 & 5: total < max_n → need more pending ─────────────────────────
+    if total < max_n and annual > 0:
+        freq_steps = {
+            m.PaymentFrequency.ANNUAL: 12, m.PaymentFrequency.SEMI: 6,
+            m.PaymentFrequency.QUARTERLY: 3, m.PaymentFrequency.MONTHLY: 1,
+        }
+        step = freq_steps.get(policy.payment_frequency, 12)
+
+        if n_paid == 0:
+            # No history — rebuild all from start_date
+            for p in pending:
+                db.delete(p)
+            db.flush()
+            base = policy.start_date or policy.expiration_date or date.today()
+            n = 0
+            for i in range(max_n):
+                db.add(m.Payment(
+                    policy_id=policy.id,
+                    amount=inst_amt,
+                    due_date=_add_months(base, step * i),
+                    status=m.PaymentStatus.PENDING,
+                ))
+                n += 1
+            return ("rebuilt", n_pending, n)
+        else:
+            # Append missing installments after the last existing one
+            all_pays = sorted(paid + pending, key=lambda p: (p.due_date or date.today(), p.id))
             last_pay = all_pays[-1]
-            created = 0
+            missing  = max_n - total
+            created  = 0
             for i in range(1, missing + 1):
                 next_due = _add_months(last_pay.due_date or date.today(), step * i)
                 db.add(m.Payment(
@@ -3220,7 +3243,7 @@ def agent_payment_edit(pay_id):
 @app.route("/agent/payments/cleanup", methods=["POST"])
 @agent_required
 def agent_payments_cleanup():
-    """Remove duplicate PENDING installments — keeps the earliest per slot."""
+    """Fix duplicate installments: trims excess PENDING keeping PAID intact."""
     db = m.get_session()
     scope = get_agent_scope()
     deleted_total = 0
@@ -3228,14 +3251,28 @@ def agent_payments_cleanup():
         q = db.query(m.Policy)
         if scope:
             q = q.filter(m.Policy.agent == scope)
-        rebuilt_total = 0
+        fixed_total = 0
         for pol in q.all():
-            action, n_del, n_new = _enforce_installments(db, pol, force_rebuild=True)
-            if action in ("rebuilt", "trimmed"):
-                deleted_total += n_del
-                rebuilt_total += 1
+            # Use force_rebuild=False so PAID count is respected
+            # This will TRIM any excess pending without recreating from scratch
+            freq_name = pol.payment_frequency.name if pol.payment_frequency else "ANNUAL"
+            max_n = FREQ_MAX.get(freq_name, 1)
+            n_paid = db.query(m.Payment).filter(
+                m.Payment.policy_id == pol.id,
+                m.Payment.status == m.PaymentStatus.PAID
+            ).count()
+            n_pending = db.query(m.Payment).filter(
+                m.Payment.policy_id == pol.id,
+                m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
+            ).count()
+            total = n_paid + n_pending
+            if total != max_n:
+                action, n_del, n_new = _enforce_installments(db, pol)
+                if action not in ("ok", "amounts_fixed"):
+                    deleted_total += n_del
+                    fixed_total += 1
         db.commit()
-        flash(f"✅ Εκκαθάριση: {rebuilt_total} συμβόλαια ενημερώθηκαν, {deleted_total} λανθασμένες δόσεις αντικαταστάθηκαν.", "success")
+        flash(f"✅ Εκκαθάριση: {fixed_total} συμβόλαια διορθώθηκαν, {deleted_total} διπλότυπες δόσεις αφαιρέθηκαν.", "success")
     except Exception as e:
         db.rollback()
         flash(f"❌ Σφάλμα: {e}", "danger")
