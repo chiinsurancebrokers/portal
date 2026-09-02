@@ -163,18 +163,17 @@
           </td>
           <td>
             <div class="d-flex gap-1 flex-wrap align-items-center">
-              <!-- Mark paid/unpaid -->
-              <form method="POST" action="{{ url_for('agent_update_payment', pay_id=r.pay_id) }}">
-                <input type="hidden" name="status" value="{{ 'PENDING' if r.pay_status=='PAID' else 'PAID' }}">
-                <button type="submit" class="btn btn-sm py-0 px-2" style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap">
-                  {{ '↩ Αναίρεση' if r.pay_status=='PAID' else '✓ Πληρώθηκε' }}
-                </button>
-              </form>
+              <!-- Mark paid/unpaid — async to avoid click-handler violation -->
+              <button class="btn btn-sm py-0 px-2"
+                      style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap"
+                      onclick="togglePaid({{ r.pay_id }}, '{{ 'PENDING' if r.pay_status=='PAID' else 'PAID' }}', this)">
+                {{ '↩ Αναίρεση' if r.pay_status=='PAID' else '✓ Πληρώθηκε' }}
+              </button>
               {% if r.pay_status != 'PAID' %}
                 <!-- Send notification -->
                 {% if r.client_email %}
                 <button onclick="sendNotification({{ r.pay_id }}, this)"
-                  class="btn btn-sm py-0 px-2"
+                  class="btn btn-sm py-0 px-2 notify-btn"
                   style="font-size:10px;background:#1B2B5E;color:#C9A96E;border:none;border-radius:5px;white-space:nowrap">
                   <i class="fas fa-envelope me-1"></i>Ειδοποίηση
                 </button>
@@ -187,7 +186,7 @@
                 <!-- Preview always visible -->
                 <a href="{{ url_for('agent_preview_payment_notification', pay_id=r.pay_id) }}"
                   target="_blank"
-                  class="btn btn-sm py-0 px-2"
+                  class="btn btn-sm py-0 px-2 preview-btn"
                   style="font-size:10px;border:1px solid #E2E8F0;border-radius:5px;white-space:nowrap">
                   👁 Preview
                 </a>
@@ -214,7 +213,94 @@
 {% endblock %}
 
 {% block scripts %}
+<!-- Custom confirm modal — replaces synchronous confirm() which blocks the main thread -->
+<div id="chiModal" style="display:none;position:fixed;inset:0;z-index:9999;background:rgba(0,0,0,0.5);align-items:center;justify-content:center">
+  <div style="background:white;border-radius:14px;padding:28px 32px;max-width:380px;width:90%;box-shadow:0 8px 40px rgba(0,0,0,0.2)">
+    <div id="chiModalMsg" style="font-size:14px;color:#1B2B5E;margin-bottom:20px;line-height:1.6"></div>
+    <div class="d-flex gap-2 justify-content-end">
+      <button id="chiModalCancel" class="btn btn-sm" style="border:1px solid #E2E8F0;padding:8px 20px">Άκυρο</button>
+      <button id="chiModalOk" class="btn btn-sm" style="background:#1B2B5E;color:white;padding:8px 20px">Επιβεβαίωση</button>
+    </div>
+  </div>
+</div>
+
 <script>
+// ── Non-blocking confirm (returns Promise — no main-thread block) ─────────────
+function chiConfirm(msg) {
+  return new Promise(resolve => {
+    const modal = document.getElementById('chiModal');
+    document.getElementById('chiModalMsg').innerHTML = msg;
+    modal.style.display = 'flex';
+    const ok  = document.getElementById('chiModalOk');
+    const can = document.getElementById('chiModalCancel');
+    function cleanup(val) {
+      modal.style.display = 'none';
+      ok.replaceWith(ok.cloneNode(true));
+      can.replaceWith(can.cloneNode(true));
+      resolve(val);
+    }
+    document.getElementById('chiModalOk').onclick     = () => cleanup(true);
+    document.getElementById('chiModalCancel').onclick = () => cleanup(false);
+    modal.onclick = e => { if (e.target === modal) cleanup(false); };
+  });
+}
+
+// ── Toast helper ─────────────────────────────────────────────────────────────
+function showToast(ok, msg) {
+  const t = document.getElementById('toast');
+  t.style.background = ok ? '#16A34A' : '#DC2626';
+  t.innerHTML = `<i class="fas fa-${ok ? 'check' : 'times'}-circle me-2"></i>${msg}`;
+  t.style.display = 'block';
+  clearTimeout(t._timer);
+  t._timer = setTimeout(() => t.style.display = 'none', 5000);
+}
+
+// ── Toggle single payment paid/pending (async — no page reload) ──────────────
+async function togglePaid(payId, newStatus, btn) {
+  const prev = btn.textContent.trim();
+  btn.disabled = true;
+  btn.textContent = '⏳';
+  try {
+    const fd = new FormData();
+    fd.append('status', newStatus);
+    await fetch(`/agent/payment/${payId}/update`, {method:'POST', body: fd});
+    // Update UI in-place — no full reload needed
+    if (newStatus === 'PAID') {
+      btn.textContent = '↩ Αναίρεση';
+      btn.style.color = '#16A34A';
+      btn.style.borderColor = '#16A34A';
+      btn.onclick = () => togglePaid(payId, 'PENDING', btn);
+      // Hide notification + preview buttons for this row
+      const row = btn.closest('tr');
+      if (row) {
+        row.querySelectorAll('.pay-checkbox').forEach(cb => { cb.checked = false; cb.style.display = 'none'; });
+        row.querySelectorAll('.notify-btn, .preview-btn').forEach(el => el.style.display = 'none');
+        // Update status badge
+        const badge = row.querySelector('.status-badge');
+        if (badge) { badge.textContent = 'PAID'; badge.className = 'status-badge badge-paid'; }
+      }
+      showToast(true, '✅ Πληρωμή σημειώθηκε ως PAID');
+    } else {
+      btn.textContent = '✓ Πληρώθηκε';
+      btn.style.color = '';
+      btn.style.borderColor = '';
+      btn.onclick = () => togglePaid(payId, 'PAID', btn);
+      const row = btn.closest('tr');
+      if (row) {
+        const badge = row.querySelector('.status-badge');
+        if (badge) { badge.textContent = 'PENDING'; badge.className = 'status-badge badge-pending'; }
+      }
+      showToast(true, '↩ Πληρωμή επαναφέρθηκε σε PENDING');
+    }
+  } catch(e) {
+    btn.disabled = false;
+    btn.textContent = prev;
+    showToast(false, 'Σφάλμα: ' + e.message);
+  }
+  btn.disabled = false;
+  updateToolbar();
+}
+
 // ── Single notification ──────────────────────────────────────────────────────
 async function sendNotification(payId, btn) {
   btn.disabled = true;
@@ -229,39 +315,23 @@ async function sendNotification(payId, btn) {
       btn.disabled = false;
       btn.innerHTML = '<i class="fas fa-envelope me-1"></i>Ειδοποίηση';
     }
-  } catch(e) {
+  } catch {
     btn.disabled = false;
     btn.innerHTML = '<i class="fas fa-envelope me-1"></i>Ειδοποίηση';
   }
 }
 
-// ── Toast helper ─────────────────────────────────────────────────────────────
-function showToast(ok, msg) {
-  const t = document.getElementById('toast');
-  t.style.background = ok ? '#16A34A' : '#DC2626';
-  t.innerHTML = `<i class="fas fa-${ok ? 'check' : 'times'}-circle me-2"></i>${msg}`;
-  t.style.display = 'block';
-  clearTimeout(t._timer);
-  t._timer = setTimeout(() => t.style.display = 'none', 5000);
-}
-
-// ── Checkbox / selection logic ────────────────────────────────────────────────
+// ── Checkbox / selection ─────────────────────────────────────────────────────
 function getSelected() {
-  return [...document.querySelectorAll('.pay-checkbox:checked')].map(cb => ({
-    id: cb.value, email: cb.dataset.email
-  }));
+  return [...document.querySelectorAll('.pay-checkbox:checked')]
+    .map(cb => ({ id: cb.value, email: cb.dataset.email }));
 }
 
 function updateToolbar() {
-  const sel = getSelected();
+  const n = getSelected().length;
   const toolbar = document.getElementById('bulkToolbar');
-  const countEl = document.getElementById('bulkCount');
-  if (sel.length > 0) {
-    toolbar.style.display = 'flex';
-    countEl.textContent = sel.length + ' επιλεγμένες';
-  } else {
-    toolbar.style.display = 'none';
-  }
+  document.getElementById('bulkCount').textContent = n + ' επιλεγμένες';
+  toolbar.style.display = n > 0 ? 'flex' : 'none';
 }
 
 function clearSelection() {
@@ -275,76 +345,79 @@ document.getElementById('selectAll').addEventListener('change', function() {
   updateToolbar();
 });
 
-document.addEventListener('change', function(e) {
-  if (e.target.classList.contains('pay-checkbox')) {
-    updateToolbar();
-    const all = document.querySelectorAll('.pay-checkbox');
-    const checked = document.querySelectorAll('.pay-checkbox:checked');
-    document.getElementById('selectAll').indeterminate = checked.length > 0 && checked.length < all.length;
-    document.getElementById('selectAll').checked = checked.length === all.length;
-  }
+document.addEventListener('change', e => {
+  if (!e.target.classList.contains('pay-checkbox')) return;
+  updateToolbar();
+  const all     = document.querySelectorAll('.pay-checkbox').length;
+  const checked = document.querySelectorAll('.pay-checkbox:checked').length;
+  const sa = document.getElementById('selectAll');
+  sa.indeterminate = checked > 0 && checked < all;
+  sa.checked = checked === all && all > 0;
 });
 
-// ── Bulk mark paid ────────────────────────────────────────────────────────────
+// ── Bulk mark paid — parallel requests ───────────────────────────────────────
 async function bulkMarkPaid() {
   const sel = getSelected();
   if (!sel.length) return;
-  if (!confirm(`Να επισημανθούν ως ΠΛΗΡΩΘΗΚΕ ${sel.length} πληρωμές;`)) return;
+  const confirmed = await chiConfirm(
+    `Να επισημανθούν ως <strong>ΠΛΗΡΩΘΗΚΕ</strong> οι ${sel.length} επιλεγμένες πληρωμές;`
+  );
+  if (!confirmed) return;
 
   const btn = document.querySelector('[onclick="bulkMarkPaid()"]');
   btn.disabled = true;
-  btn.textContent = '⏳ Επεξεργασία...';
+  btn.textContent = '⏳ ' + sel.length + ' πληρωμές...';
 
-  let ok = 0, fail = 0;
-  for (const {id} of sel) {
-    try {
-      const fd = new FormData();
-      fd.append('status', 'PAID');
-      const r = await fetch(`/agent/payment/${id}/update`, {method:'POST', body: fd});
-      if (r.ok || r.redirected) ok++;
-      else fail++;
-    } catch { fail++; }
-  }
+  // Fire all requests in parallel — much faster, no main-thread blocking
+  const results = await Promise.allSettled(sel.map(({id}) => {
+    const fd = new FormData();
+    fd.append('status', 'PAID');
+    return fetch(`/agent/payment/${id}/update`, {method:'POST', body: fd});
+  }));
 
+  const ok   = results.filter(r => r.status === 'fulfilled').length;
+  const fail = results.filter(r => r.status === 'rejected').length;
   showToast(fail === 0, `✅ ${ok} πληρωμές σημειώθηκαν ως PAID${fail ? ` · ❌ ${fail} σφάλματα` : ''}`);
   btn.disabled = false;
   btn.textContent = '✓ Μαζική Πληρωμή';
   clearSelection();
-  // Reload after short delay to reflect new statuses
-  setTimeout(() => location.reload(), 1500);
+  setTimeout(() => location.reload(), 1200);
 }
 
-// ── Bulk notify ───────────────────────────────────────────────────────────────
+// ── Bulk notify — sequential with 250ms gap (Brevo rate limit) ───────────────
 async function bulkNotify() {
-  const sel = getSelected().filter(s => s.email);
-  const noEmail = getSelected().filter(s => !s.email);
-  if (!sel.length) {
+  const all     = getSelected();
+  const withEmail    = all.filter(s => s.email);
+  const withoutEmail = all.filter(s => !s.email);
+
+  if (!withEmail.length) {
     showToast(false, 'Καμία επιλεγμένη πληρωμή δεν έχει email πελάτη.');
     return;
   }
-  const msg = `Να σταλεί ειδοποίηση πληρωμής σε ${sel.length} πελάτες;`
-    + (noEmail.length ? `
-(${noEmail.length} παραλείπονται — χωρίς email)` : '');
-  if (!confirm(msg)) return;
+
+  const confirmed = await chiConfirm(
+    `Να σταλεί ειδοποίηση πληρωμής σε <strong>${withEmail.length} πελάτες</strong>;`
+    + (withoutEmail.length ? `<br><small style="color:#94A3B8">${withoutEmail.length} παραλείπονται — χωρίς email</small>` : '')
+  );
+  if (!confirmed) return;
 
   const btn = document.querySelector('[onclick="bulkNotify()"]');
   btn.disabled = true;
-  btn.textContent = '⏳ Αποστολή...';
 
   let ok = 0, fail = 0;
-  for (const {id} of sel) {
+  for (let i = 0; i < withEmail.length; i++) {
+    btn.textContent = `⏳ ${i + 1}/${withEmail.length}...`;
     try {
-      const r = await fetch(`/agent/payment/${id}/notify`, {method:'POST'});
+      const r = await fetch(`/agent/payment/${withEmail[i].id}/notify`, {method:'POST'});
       const d = await r.json();
       if (d.success) ok++; else fail++;
     } catch { fail++; }
-    // Small delay to avoid hammering the email API
-    await new Promise(res => setTimeout(res, 300));
+    if (i < withEmail.length - 1) await new Promise(r => setTimeout(r, 250));
   }
 
   showToast(fail === 0,
     `✉ Στάλθηκαν: ${ok}${fail ? ` · ❌ Απέτυχαν: ${fail}` : ''}`
-    + (noEmail.length ? ` · ⚠ Χωρίς email: ${noEmail.length}` : ''));
+    + (withoutEmail.length ? ` · ⚠ Χωρίς email: ${withoutEmail.length}` : ''));
   btn.disabled = false;
   btn.textContent = '✉ Μαζική Ειδοποίηση';
   clearSelection();
