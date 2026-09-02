@@ -13,9 +13,9 @@
     <div class="d-flex gap-2">
     {% if issues %}
     <form method="POST" action="{{ url_for('agent_payments_cleanup') }}"
-          onsubmit="return confirm('Να διαγραφούν ΟΛΕΣ οι διπλότυπες δόσεις; Θα κρατηθούν μόνο οι πρώτες ανά συμβόλαιο.')">
+          onsubmit="return confirm('Βαθιά εκκαθάριση:\n1. Αφαιρεί εγγραφές ίδιας ημερομηνίας (κρατά PAID πάνω από PENDING)\n2. Κόβει τυχόν περιττές PENDING βάσει συχνότητας πληρωμής\nΔΕΝ αφαιρεί ποτέ PAID εγγραφές.\n\nΠροχωράμε;')">
       <button type="submit" class="btn btn-sm" style="background:#DC2626;color:white">
-        🗑 Εκκαθάριση Διπλοτύπων
+        🗑 Βαθιά Εκκαθάριση Διπλοτύπων
       </button>
     </form>
     <form method="POST" action="{{ url_for('agent_payments_fix') }}"
