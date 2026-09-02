@@ -3243,36 +3243,90 @@ def agent_payment_edit(pay_id):
 @app.route("/agent/payments/cleanup", methods=["POST"])
 @agent_required
 def agent_payments_cleanup():
-    """Fix duplicate installments: trims excess PENDING keeping PAID intact."""
+    """Deep cleanup of duplicate installments.
+
+    Step 1 — Remove exact duplicates (same policy_id + due_date):
+              keep the PAID one if exists, else keep the earliest by id.
+    Step 2 — After dedup, enforce max_n total (paid+pending) per policy,
+              trimming excess PENDING from the end.
+    PAID payments are NEVER deleted.
+    """
     db = m.get_session()
     scope = get_agent_scope()
     deleted_total = 0
+    fixed_total   = 0
     try:
         q = db.query(m.Policy)
         if scope:
             q = q.filter(m.Policy.agent == scope)
-        fixed_total = 0
+
         for pol in q.all():
-            # Use force_rebuild=False so PAID count is respected
-            # This will TRIM any excess pending without recreating from scratch
             freq_name = pol.payment_frequency.name if pol.payment_frequency else "ANNUAL"
-            max_n = FREQ_MAX.get(freq_name, 1)
-            n_paid = db.query(m.Payment).filter(
-                m.Payment.policy_id == pol.id,
-                m.Payment.status == m.PaymentStatus.PAID
-            ).count()
-            n_pending = db.query(m.Payment).filter(
-                m.Payment.policy_id == pol.id,
-                m.Payment.status.in_([m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE])
-            ).count()
+            max_n     = FREQ_MAX.get(freq_name, 1)
+
+            all_pays = sorted(
+                db.query(m.Payment).filter_by(policy_id=pol.id).all(),
+                key=lambda p: (p.due_date or date.today(), p.id)
+            )
+            if not all_pays:
+                continue
+
+            # ── Step 1: remove exact date duplicates ──────────────────────────
+            seen_dates = {}   # due_date → chosen Payment to keep
+            to_delete  = []
+            for pay in all_pays:
+                key = pay.due_date
+                if key not in seen_dates:
+                    seen_dates[key] = pay
+                else:
+                    existing = seen_dates[key]
+                    # Prefer PAID over PENDING; among same status keep lower id
+                    existing_is_paid = existing.status == m.PaymentStatus.PAID
+                    this_is_paid     = pay.status     == m.PaymentStatus.PAID
+                    if this_is_paid and not existing_is_paid:
+                        # Replace: keep this one, delete the existing
+                        to_delete.append(existing)
+                        seen_dates[key] = pay
+                    else:
+                        # Keep existing, delete this one (never delete PAID)
+                        if pay.status != m.PaymentStatus.PAID:
+                            to_delete.append(pay)
+                        elif existing.status != m.PaymentStatus.PAID:
+                            to_delete.append(existing)
+                            seen_dates[key] = pay
+                        # If both PAID — keep both (data problem, don't delete)
+
+            for p in to_delete:
+                db.delete(p)
+                deleted_total += 1
+            if to_delete:
+                db.flush()
+                fixed_total += 1
+
+            # ── Step 2: enforce max_n after dedup ─────────────────────────────
+            remaining = [p for p in seen_dates.values()]
+            n_paid    = sum(1 for p in remaining if p.status == m.PaymentStatus.PAID)
+            n_pending = sum(1 for p in remaining
+                           if p.status in (m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE))
             total = n_paid + n_pending
-            if total != max_n:
-                action, n_del, n_new = _enforce_installments(db, pol)
-                if action not in ("ok", "amounts_fixed"):
-                    deleted_total += n_del
+
+            if total > max_n:
+                # Sort pending by due_date, delete excess from the end
+                pending_sorted = sorted(
+                    [p for p in remaining
+                     if p.status in (m.PaymentStatus.PENDING, m.PaymentStatus.OVERDUE)],
+                    key=lambda p: (p.due_date or date.today(), p.id)
+                )
+                keep_n   = max(0, max_n - n_paid)
+                excess   = pending_sorted[keep_n:]
+                for p in excess:
+                    db.delete(p)
+                    deleted_total += 1
+                if excess:
                     fixed_total += 1
+
         db.commit()
-        flash(f"✅ Εκκαθάριση: {fixed_total} συμβόλαια διορθώθηκαν, {deleted_total} διπλότυπες δόσεις αφαιρέθηκαν.", "success")
+        flash(f"✅ Εκκαθάριση ολοκληρώθηκε: {deleted_total} διπλότυπες δόσεις αφαιρέθηκαν σε {fixed_total} συμβόλαια.", "success")
     except Exception as e:
         db.rollback()
         flash(f"❌ Σφάλμα: {e}", "danger")
