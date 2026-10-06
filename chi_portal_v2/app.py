@@ -1930,7 +1930,8 @@ def client_hal_chat():
     finally:
         db.close()
     system = hal_scope.system_prompt(hal.CHI_SYSTEM_CONTEXT, scope, context)
-    response = hal.chat_with_tools(messages, system, [], None)
+    response = hal.chat_with_tools(messages, system, hal_scope.tools_for(scope),
+                                   hal_scope.make_executor(scope))
     return jsonify({"response": response})
 
 # ══════════════════════════════════════════════════════════════════════════════
