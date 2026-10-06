@@ -69,6 +69,9 @@ def _run_migrations():
             for sql in [
                 "ALTER TABLE users ADD COLUMN agent_code VARCHAR(20)",
                 "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE clients ADD COLUMN marketing_opt_in BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE clients ADD COLUMN last_upsell_email TIMESTAMP",
+                "ALTER TABLE email_queue ADD COLUMN email_type VARCHAR(20) DEFAULT 'RENEWAL'",
             ]:
                 try:
                     conn.execute(_text(sql)); conn.commit()
@@ -823,7 +826,8 @@ def agent_add_client():
                 city=request.form.get("city"), tax_id=tax_id or None,
                 id_number=request.form.get("id_number"), date_of_birth=dob,
                 profession=request.form.get("profession"), company_name=request.form.get("company_name"),
-                notes=request.form.get("notes"), vip=bool(request.form.get("vip"))
+                notes=request.form.get("notes"), vip=bool(request.form.get("vip")),
+                marketing_opt_in=bool(request.form.get("marketing_opt_in"))
             )
             db.add(client)
             db.commit()
@@ -1070,6 +1074,7 @@ def agent_edit_client(client_id):
             client.company_name= request.form.get("company_name")
             client.notes       = request.form.get("notes")
             client.vip         = bool(request.form.get("vip"))
+            client.marketing_opt_in = bool(request.form.get("marketing_opt_in"))
             client.updated_date = datetime.now()
             db.commit()
             flash("✅ Στοιχεία πελάτη ενημερώθηκαν.", "success")
@@ -1413,6 +1418,111 @@ def agent_email_queue():
                      "policy_type": p.policy_type if p else "—"})
     db.close()
     return render_template("agent/email_queue.html", emails=data)
+
+# ── HAL MONTHLY UPSELL / CROSS-SELL BATCH ──────────────────────────────────────
+# Core sectors we actively cross-sell. A client missing one of these is a candidate.
+UPSELL_TARGET_SECTORS = ["HEALTH", "LIFE", "MOTOR", "PROPERTY", "TRAVEL", "PET"]
+
+
+def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None):
+    """Build HAL upsell emails for eligible clients and drop them in the email queue
+    as QUEUED/UPSELL rows for human review. Never sends. Respects marketing opt-out
+    and a per-client cooldown. Returns a summary dict."""
+    from sqlalchemy import or_ as _or
+    cutoff = datetime.now() - timedelta(days=min_days)
+    summary = {"queued": 0, "skipped_no_opportunity": 0, "skipped_recent": 0,
+               "skipped_already_queued": 0, "errors": 0, "considered": 0}
+
+    # Clients with an email, opted in (NULL counts as in), that have >=1 active policy.
+    cq = db.query(m.Client).filter(
+        m.Client.email.isnot(None), m.Client.email != "",
+        _or(m.Client.marketing_opt_in.is_(None), m.Client.marketing_opt_in == True),  # noqa: E712
+    )
+    clients = cq.order_by(m.Client.vip.desc(), m.Client.id).all()
+    for c in clients:
+        if summary["queued"] >= limit:
+            break
+        pol_q = db.query(m.Policy).filter_by(client_id=c.id, status=m.PolicyStatus.ACTIVE)
+        if agent_code:
+            pol_q = pol_q.filter(m.Policy.agent == agent_code)
+        active = pol_q.all()
+        if not active:
+            continue
+        summary["considered"] += 1
+        if c.last_upsell_email and c.last_upsell_email > cutoff:
+            summary["skipped_recent"] += 1
+            continue
+        if db.query(m.EmailQueue).filter_by(client_id=c.id, status=m.EmailStatus.QUEUED,
+                                            email_type="UPSELL").first():
+            summary["skipped_already_queued"] += 1
+            continue
+        held = {p.sector.name for p in active if p.sector}
+        missing = [m.PolicySector[s].value for s in UPSELL_TARGET_SECTORS if s not in held]
+        if not missing:
+            summary["skipped_no_opportunity"] += 1
+            continue
+        anchor = max(active, key=lambda p: (p.premium or 0))
+        pol_payload = [{"sector": p.sector.value if p.sector else "", "type": p.policy_type or "",
+                        "provider": p.provider or "", "premium": round(float(p.premium or 0), 2),
+                        "expiry": str(p.expiration_date) if p.expiration_date else ""} for p in active]
+        try:
+            email = hal.upsell_email(
+                {"name": c.name, "profession": c.profession, "city": c.city},
+                pol_payload, missing)
+            if not email:
+                summary["errors"] += 1
+                continue
+            db.add(m.EmailQueue(
+                client_id=c.id, policy_id=anchor.id, recipient_email=c.email,
+                subject=email["subject"], body_html=email["body_html"],
+                status=m.EmailStatus.QUEUED, email_type="UPSELL"))
+            c.last_upsell_email = datetime.now()
+            db.commit()
+            summary["queued"] += 1
+        except Exception as e:
+            db.rollback()
+            summary["errors"] += 1
+            app.logger.warning("upsell batch error for client %s: %s", c.id, e)
+    return summary
+
+
+@app.route("/admin/upsell/generate", methods=["POST"])
+@agent_required
+def admin_upsell_generate():
+    """Manual trigger: build the monthly upsell batch into the queue for review.
+    Admin builds office-wide; a scoped external agent builds only their own clients."""
+    scope = get_agent_scope()
+    limit = request.form.get("limit", 50, type=int)
+    db = m.get_session()
+    try:
+        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 200), agent_code=scope)
+    finally:
+        db.close()
+    flash(f"🤖 HAL upsell: {summary['queued']} email μπήκαν στην ουρά για έλεγχο "
+          f"(εξετάστηκαν {summary['considered']}, χωρίς ευκαιρία {summary['skipped_no_opportunity']}, "
+          f"πρόσφατα {summary['skipped_recent']}, ήδη σε ουρά {summary['skipped_already_queued']}).",
+          "success" if summary["queued"] else "info")
+    return redirect(url_for("agent_email_queue"))
+
+
+@app.route("/api/upsell/run", methods=["POST", "GET"])
+def api_upsell_run():
+    """Keyed endpoint for the monthly scheduler. Office-wide, queue-only (no send).
+    Protect with UPSELL_KEY env var: /api/upsell/run?key=..."""
+    expected = os.getenv("UPSELL_KEY", "")
+    key = request.args.get("key", "")
+    if not key and request.is_json:
+        key = (request.get_json(silent=True) or {}).get("key", "")
+    if not expected or key != expected:
+        return jsonify({"error": "unauthorized"}), 401
+    limit = request.args.get("limit", 100, type=int)
+    db = m.get_session()
+    try:
+        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 300))
+    finally:
+        db.close()
+    return jsonify(summary)
+
 
 @app.route("/agent/email/<int:eq_id>/send", methods=["POST"])
 @agent_required

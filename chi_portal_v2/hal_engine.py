@@ -146,6 +146,47 @@ def upsell_opportunities(client_data: dict, policies: list) -> str:
     return _call_api([{"role": "user", "content": prompt}], max_tokens=800)
 
 
+def upsell_email(client_data: dict, policies: list, missing_sectors: list) -> dict:
+    """Generate a warm, client-facing upsell/cross-sell email based on real policy data.
+    Returns {subject, body_html}. The email suggests relevant extra cover — never pushy,
+    grounded only in what the client already holds and what is missing."""
+    name = client_data.get("name", "")
+    lang = "ελληνικά" if any(ord(c) > 127 for c in name) else "αγγλικά"
+    held = ", ".join(sorted({p.get("sector", "") for p in policies if p.get("sector")})) or "—"
+    prompt = f"""Γράψε ένα ΖΕΣΤΟ, σύντομο email cross-selling/upselling σε {lang} προς πελάτη ασφαλιστικού γραφείου.
+Στόχος: να προτείνεις διακριτικά 1 έως 3 σχετικές επιπλέον καλύψεις — ΟΧΙ πιεστικά, σαν φροντίδα, όχι πώληση.
+
+Πελάτης: {name} | Επάγγελμα: {client_data.get('profession','—')} | Πόλη: {client_data.get('city','—')}
+Τομείς που ΕΧΕΙ ήδη ασφαλισμένους: {held}
+Τομείς που ΔΕΝ έχει (πιθανές ευκαιρίες): {', '.join(missing_sectors) or '—'}
+Υπάρχοντα συμβόλαια (πραγματικά δεδομένα):
+{json.dumps(policies, ensure_ascii=False, indent=2)}
+
+Κανόνες:
+- Ξεκίνα προσωπικά, αναγνώρισε τι έχει ήδη ασφαλίσει μαζί μας.
+- Πρότεινε ΜΟΝΟ καλύψεις που λογικά του λείπουν ή αναβαθμίσεις που ταιριάζουν στο προφίλ του. Μην επινοείς στοιχεία.
+- Για κάθε πρόταση, μία σύντομη πρόταση γιατί τον αφορά.
+- Κλείσε με κάλεσμα για μια σύντομη, χωρίς δέσμευση κουβέντα.
+- Στοιχεία επικοινωνίας: Χρήστος Ιατρόπουλος, 6975900189, info@chiinsurancebrokers.com
+- Πρόσθεσε στο τέλος, σε μικρή γραμματοσειρά, ότι μπορεί να εξαιρεθεί από τέτοια ενημερωτικά email απαντώντας «STOP».
+- HTML format, καθαρό, χωρίς υπερβολές. Μέγιστο ~200 λέξεις.
+
+Απάντησε ΜΟΝΟ με JSON: {{"subject": "...", "body_html": "..."}}"""
+    raw = _call_api([{"role": "user", "content": prompt}], max_tokens=1200)
+    try:
+        clean = raw.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+        data = json.loads(clean.strip())
+        if data.get("subject") and data.get("body_html"):
+            return data
+    except Exception:
+        pass
+    return {}
+
+
 def lixiario_insights(month_data: list, month: int, year: int) -> str:
     """Analyze monthly expiry list and prioritize renewals."""
     month_names = ["","Ιανουάριος","Φεβρουάριος","Μάρτιος","Απρίλιος","Μάιος","Ιούνιος",
