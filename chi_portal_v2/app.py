@@ -1622,6 +1622,21 @@ def api_upsell_run():
         db.close()
     return jsonify(summary)
 
+
+@app.route("/api/test-email", methods=["GET", "POST"])
+def api_test_email():
+    """Keyed test send to verify the live email path (Resend first). ?key=UPSELL_KEY&to=..."""
+    expected = os.getenv("UPSELL_KEY", "")
+    if not expected or request.args.get("key", "") != expected:
+        return jsonify({"error": "unauthorized"}), 401
+    to = request.args.get("to", "") or MAIL_BCC
+    ok, err = _send_email(to, "Ashlar Test",
+                          "Ashlar Assurance — Test email (Resend)",
+                          "<p>Αυτό είναι δοκιμαστικό email από το Ashlar portal, μέσω Resend.</p>")
+    return jsonify({"sent": ok, "error": err, "from": MAIL_FROM_EMAIL,
+                    "reply_to": MAIL_REPLY_TO, "to": to,
+                    "resend_key_set": bool(os.getenv("RESEND_API_KEY"))})
+
 @app.route("/agent/email/<int:eq_id>/send", methods=["POST"])
 @agent_required
 def agent_send_email(eq_id):
@@ -1635,7 +1650,7 @@ def agent_send_email(eq_id):
         db.close()
         return redirect(url_for("agent_email_queue"))
     try:
-        ok, err_msg = _brevo_send(eq.recipient_email, eq.recipient_email, eq.subject, eq.body_html)
+        ok, err_msg = _send_email(eq.recipient_email, eq.recipient_email, eq.subject, eq.body_html)
         if ok:
             eq.status = m.EmailStatus.SENT
             eq.sent_at = datetime.now()
@@ -2762,14 +2777,17 @@ def test_email():
     gmail_user = os.getenv("GMAIL_USER","")
     gmail_pass = bool(os.getenv("GMAIL_APP_PASS"))
     status = {
+        "RESEND_API_KEY":  "✓ set" if bool(os.getenv("RESEND_API_KEY")) else "✗ NOT SET",
+        "MAIL_FROM_EMAIL": MAIL_FROM_EMAIL,
         "BREVO_API_KEY":   "✓ set" if brevo_key  else "✗ NOT SET",
         "BREVO_SMTP_USER": brevo_user or "✗ NOT SET",
         "BREVO_SMTP_PASS": "✓ set" if brevo_pass else "✗ NOT SET",
         "GMAIL_USER":      gmail_user or "✗ NOT SET",
         "GMAIL_APP_PASS":  "✓ set" if gmail_pass else "✗ NOT SET",
     }
-    # Try sending test email
-    ok, err = _brevo_send("xiatropoulos@gmail.com","Chris","Test CHI Portal","<p>Test OK</p>")
+    # Try sending test email (Resend first, Brevo fallback)
+    to = request.args.get("to", "") or MAIL_BCC
+    ok, err = _send_email(to, "Chris", "Test — Ashlar Portal", "<p>Test OK — sent via Resend.</p>")
     result = "✅ Email sent!" if ok else f"❌ {err}"
     rows = "".join(f"<tr><td style='padding:6px 12px;border-bottom:1px solid #eee'>{k}</td><td style='padding:6px 12px;border-bottom:1px solid #eee'>{v}</td></tr>" for k,v in status.items())
     return f"""<html><body style='font-family:sans-serif;padding:30px'>
@@ -3859,7 +3877,7 @@ def agent_send_payment_notification(pay_id):
         return jsonify({"error": "BREVO_API_KEY δεν έχει οριστεί"}), 500
 
     try:
-        ok, err_msg = _brevo_send(client_email, client_name, subject, body_html)
+        ok, err_msg = _send_email(client_email, client_name, subject, body_html)
         if ok:
             # Log in email queue
             eq = m.EmailQueue(
@@ -4369,6 +4387,46 @@ def admin_create_agent_user(agent_id):
 
 DEFAULT_PASSWORD = "YouM@tt3r!"
 
+def _resend_send(to_email: str, to_name: str, subject: str, body_html: str) -> tuple:
+    """Send email via Resend. Returns (success, error_message).
+    Sends from MAIL_FROM_EMAIL (domain must be verified in Resend)."""
+    import requests as req
+    key = os.getenv("RESEND_API_KEY", "")
+    if not key:
+        return False, "RESEND_API_KEY not set"
+    payload = {
+        "from": f"{MAIL_FROM_NAME} <{MAIL_FROM_EMAIL}>",
+        "to": [to_email],
+        "subject": subject,
+        "html": body_html,
+        "reply_to": MAIL_REPLY_TO,
+    }
+    if MAIL_BCC:
+        payload["bcc"] = [MAIL_BCC]
+    try:
+        resp = req.post("https://api.resend.com/emails",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json=payload, timeout=20)
+        if resp.status_code in (200, 201, 202):
+            return True, ""
+        return False, f"Resend error {resp.status_code}: {resp.text[:300]}"
+    except Exception as e:
+        return False, str(e)
+
+
+def _send_email(to_email: str, to_name: str, subject: str, body_html: str) -> tuple:
+    """Unified sender: Resend first (domain verified there), Brevo as fallback."""
+    if os.getenv("RESEND_API_KEY", ""):
+        ok, err = _resend_send(to_email, to_name, subject, body_html)
+        if ok:
+            return True, ""
+        b_ok, b_err = _brevo_send(to_email, to_name, subject, body_html)
+        if b_ok:
+            return True, ""
+        return False, f"Resend: {err} | Brevo fallback: {b_err}"
+    return _brevo_send(to_email, to_name, subject, body_html)
+
+
 def _brevo_send(to_email: str, to_name: str, subject: str, body_html: str) -> tuple:
     """Send email via Brevo. Returns (success, error_message)."""
     import requests as req
@@ -4485,7 +4543,7 @@ def _send_reset_email(to_email: str, to_name: str, reset_url: str) -> bool:
   <div style='font-size:11px;color:#94A3B8'>CHI Insurance Brokers · xiatropoulos@gmail.com</div>
 </td></tr>
 </table></body></html>"""
-    ok, _ = _brevo_send(to_email, to_name, "Επαναφορά Κωδικού — CHI Insurance Portal", body_html)
+    ok, _ = _send_email(to_email, to_name, "Επαναφορά Κωδικού — Ashlar Assurance", body_html)
     return ok
 
 
