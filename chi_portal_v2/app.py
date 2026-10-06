@@ -27,15 +27,30 @@ app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 # CHI Contact info (available in all templates)
 CHI_CONTACT = {
-    "name": "CHI Insurance Brokers",
+    "name": "Ashlar Assurance",
     "phone": "+306975900189",
-    "email": "xiatropoulos@gmail.com",
-    "company": "CHI Insurance Brokers",
+    "email": "c.iatropoulos@ashlarassurance.com",
+    "company": "Chris Iatropoulos",
 }
 
 @app.context_processor
 def _inject_chi():
     return {"CHI_CONTACT": CHI_CONTACT}
+
+@app.before_request
+def _brand_and_canonical():
+    # Refresh any stale admin display name left over from the CHI era.
+    if session.get("user_name") == "CHI Insurance Brokers":
+        session["user_name"] = "Ashlar Assurance"
+    # Optional: converge everyone onto the branded domain while old links keep
+    # working (301). Set PRIMARY_HOST=portal.ashlarassurance.com to enable; the
+    # old portalchiinsurance.up.railway.app URL then redirects there. Leave unset
+    # and both domains serve the app directly.
+    primary = os.getenv("PRIMARY_HOST", "")
+    if (primary and request.host and request.host != primary
+            and request.method == "GET"
+            and not request.path.startswith(("/api/", "/static/"))):
+        return redirect(f"https://{primary}{request.full_path.rstrip('?')}", code=301)
 
 @app.context_processor
 def _inject_client_ticket_badge():
@@ -71,6 +86,7 @@ def _run_migrations():
             "ALTER TABLE clients ADD COLUMN marketing_opt_in BOOLEAN DEFAULT TRUE",
             "ALTER TABLE clients ADD COLUMN last_upsell_email TIMESTAMP",
             "ALTER TABLE email_queue ADD COLUMN email_type VARCHAR(20) DEFAULT 'RENEWAL'",
+            "UPDATE users SET name='Ashlar Assurance' WHERE name='CHI Insurance Brokers'",
         ]:
             # Fresh connection per statement: a failing ALTER (e.g. column already
             # exists) aborts only its own transaction, so later NEW columns still apply.
@@ -434,9 +450,9 @@ def setup():
             backoffice_pw = os.getenv("BACKOFFICE_PASSWORD", "YouM@tt3r!")
             # Create default admin agent (chi = head office)
             if not db.query(m.Agent).filter_by(code="chi").first():
-                db.add(m.Agent(code="chi", name="Chris Iatropoulos — CHI Insurance Brokers",
+                db.add(m.Agent(code="chi", name="Chris Iatropoulos — Ashlar Assurance",
                                email="info@chiinsurancebrokers.com", is_admin=True, active=True,
-                               company_name="CHI Insurance Brokers"))
+                               company_name="Ashlar Assurance"))
                 created.append("Admin Agent: chi")
             db.flush()
             # Admin user
@@ -448,7 +464,7 @@ def setup():
                               agent_code=None))
                 created.append("Admin user")
             else:
-                existing_admin.name = "CHI Insurance Brokers"
+                existing_admin.name = "Ashlar Assurance"
                 existing_admin.agent_code = None
             # Backoffice user
             if not db.query(m.User).filter_by(email="backoffice@chiinsurancebrokers.com").first():
@@ -482,7 +498,7 @@ def setup():
             db.close()
             # Also update current session name
             if session.get("agent_scope") is None and session.get("role") == "agent":
-                session["user_name"] = "CHI Insurance Brokers"
+                session["user_name"] = "Ashlar Assurance"
             return f"""<div style='{style}'>
             <h2 style='color:green'>✅ Setup complete!</h2>
             <p>Created: {', '.join(created) if created else 'Users already existed'}</p>
@@ -501,7 +517,7 @@ def setup():
     db_url = os.getenv("DATABASE_URL", "NOT SET")
     db_status = "✅ Set" if os.getenv("DATABASE_URL") else "❌ NOT SET — add PostgreSQL plugin in Railway"
     return f"""<!DOCTYPE html><html><body style='{style}'>
-    <h2>CHI Insurance Portal v2 — Setup</h2>
+    <h2>Ashlar Assurance — Portal Setup</h2>
     <p>DB: {db_status}</p>
     <p>ANTHROPIC_API_KEY: {"✅ Set" if os.getenv("ANTHROPIC_API_KEY") else "⚠️ Not set (HAL won't work)"}</p>
     <hr>
@@ -2753,10 +2769,10 @@ def fix_name():
     try:
         user = db.query(m.User).get(session.get("user_id"))
         if user and user.agent_code is None and user.role == m.UserRole.AGENT:
-            user.name = "CHI Insurance Brokers"
+            user.name = "Ashlar Assurance"
             db.commit()
-            session["user_name"] = "CHI Insurance Brokers"
-            flash("✅ Όνομα ενημερώθηκε σε 'CHI Insurance Brokers'.", "success")
+            session["user_name"] = "Ashlar Assurance"
+            flash("✅ Όνομα ενημερώθηκε σε 'Ashlar Assurance'.", "success")
         else:
             flash("Δεν απαιτείται αλλαγή.", "info")
     except Exception as e:
@@ -3654,7 +3670,7 @@ AGENT_BANK_ACCOUNTS = {
         ]
     },
     "chi": {
-        "company": "CHI Insurance Brokers",
+        "company": "Ashlar Assurance",
         "afm": "",
         "banks": []  # Add CHI IBAN if needed
     }
@@ -3765,8 +3781,8 @@ def _build_payment_email_html(client, policy, payment, bank_info, show_banks: bo
 
   <!-- Header -->
   <tr><td style='background:linear-gradient(135deg,#1B2B5E,#2E4BA3);padding:28px 36px'>
-    <div style='color:#C9A96E;font-size:28px;font-weight:900;letter-spacing:4px'>CHI</div>
-    <div style='color:rgba(255,255,255,0.6);font-size:11px;letter-spacing:2px;text-transform:uppercase'>Insurance Brokers</div>
+    <div style='color:#C9A96E;font-size:26px;font-weight:800;letter-spacing:2px'>Ashlar Assurance</div>
+    <div style='color:rgba(255,255,255,0.6);font-size:11px;letter-spacing:1px'>Chris Iatropoulos · Insurance Broker</div>
   </td></tr>
 
   <!-- Body -->
@@ -3829,8 +3845,8 @@ def _build_payment_email_html(client, policy, payment, bank_info, show_banks: bo
   <!-- Footer -->
   <tr><td style='background:#F8FAFC;padding:20px 36px;border-top:1px solid #E2E8F0'>
     <div style='font-size:12px;color:#94A3B8;line-height:1.8'>
-      <strong style='color:#1B2B5E'>CHI Insurance Brokers</strong><br>
-      xiatropoulos@gmail.com &nbsp;·&nbsp; <strong>+30 697 590 0189</strong><br>
+      <strong style='color:#1B2B5E'>Ashlar Assurance — Chris Iatropoulos</strong><br>
+      c.iatropoulos@ashlarassurance.com &nbsp;·&nbsp; <strong>+30 697 590 0189</strong><br>
       Για οποιαδήποτε απορία επικοινωνήστε μαζί μας.
     </div>
   </td></tr>
@@ -4526,7 +4542,7 @@ def _send_reset_email(to_email: str, to_name: str, reset_url: str) -> bool:
 <tr><td style='padding:32px'>
   <h2 style='color:#1B2B5E;margin:0 0 10px'>Επαναφορά Κωδικού</h2>
   <p style='color:#374151;font-size:14px;line-height:1.7'>Γεια σου <strong>{to_name}</strong>,<br>
-  Λάβαμε αίτημα επαναφοράς κωδικού για τον λογαριασμό σου στο CHI Insurance Portal.</p>
+  Λάβαμε αίτημα επαναφοράς κωδικού για τον λογαριασμό σου στο Ashlar Assurance Portal.</p>
   <div style='text-align:center;margin:28px 0'>
     <a href='{reset_url}' style='background:linear-gradient(135deg,#1B2B5E,#2E4BA3);color:white;
        padding:14px 32px;text-decoration:none;border-radius:10px;font-size:15px;font-weight:600;
@@ -4540,7 +4556,7 @@ def _send_reset_email(to_email: str, to_name: str, reset_url: str) -> bool:
   </p>
 </td></tr>
 <tr><td style='background:#F8FAFC;padding:16px 32px;border-top:1px solid #E2E8F0'>
-  <div style='font-size:11px;color:#94A3B8'>CHI Insurance Brokers · xiatropoulos@gmail.com</div>
+  <div style='font-size:11px;color:#94A3B8'>Ashlar Assurance · c.iatropoulos@ashlarassurance.com</div>
 </td></tr>
 </table></body></html>"""
     ok, _ = _send_email(to_email, to_name, "Επαναφορά Κωδικού — Ashlar Assurance", body_html)
