@@ -146,33 +146,32 @@ def upsell_opportunities(client_data: dict, policies: list) -> str:
     return _call_api([{"role": "user", "content": prompt}], max_tokens=800)
 
 
-def upsell_email(client_data: dict, policies: list, missing_sectors: list) -> dict:
-    """Generate a warm, client-facing upsell/cross-sell email based on real policy data.
-    Returns {subject, body_html}. The email suggests relevant extra cover — never pushy,
-    grounded only in what the client already holds and what is missing."""
+def upsell_copy(client_data: dict, policies: list, promoted_line: str) -> dict:
+    """Write the Greek, plain-language COPY for a monthly upsell email promoting ONE
+    business line. Returns {subject, paragraphs:[...]} — plain text only. The portal
+    wraps this in the branded HTML shell (logo, hero image, footer), so HAL writes
+    words, not markup. Grounded in the client's real existing policies."""
     name = client_data.get("name", "")
-    lang = "ελληνικά" if any(ord(c) > 127 for c in name) else "αγγλικά"
     held = ", ".join(sorted({p.get("sector", "") for p in policies if p.get("sector")})) or "—"
-    prompt = f"""Γράψε ένα ΖΕΣΤΟ, σύντομο email cross-selling/upselling σε {lang} προς πελάτη ασφαλιστικού γραφείου.
-Στόχος: να προτείνεις διακριτικά 1 έως 3 σχετικές επιπλέον καλύψεις — ΟΧΙ πιεστικά, σαν φροντίδα, όχι πώληση.
+    first = (name or "").split()[0] if name else ""
+    prompt = f"""Γράψε το κείμενο ενός σύντομου, ΖΕΣΤΟΥ email σε ΑΠΛΑ ΕΛΛΗΝΙΚΑ (καθημερινός, κατανοητός λόγος — όχι ασφαλιστική ορολογία) προς πελάτη του ασφαλιστικού γραφείου.
+Αυτόν τον μήνα προβάλλουμε ΜΙΑ κατηγορία: «{promoted_line}». Πρότεινε διακριτικά αυτή την κάλυψη — σαν φροντίδα, όχι πίεση.
 
 Πελάτης: {name} | Επάγγελμα: {client_data.get('profession','—')} | Πόλη: {client_data.get('city','—')}
-Τομείς που ΕΧΕΙ ήδη ασφαλισμένους: {held}
-Τομείς που ΔΕΝ έχει (πιθανές ευκαιρίες): {', '.join(missing_sectors) or '—'}
-Υπάρχοντα συμβόλαια (πραγματικά δεδομένα):
+Τι έχει ήδη ασφαλίσει μαζί μας: {held}
+Τα συμβόλαιά του (πραγματικά στοιχεία):
 {json.dumps(policies, ensure_ascii=False, indent=2)}
 
 Κανόνες:
-- Ξεκίνα προσωπικά, αναγνώρισε τι έχει ήδη ασφαλίσει μαζί μας.
-- Πρότεινε ΜΟΝΟ καλύψεις που λογικά του λείπουν ή αναβαθμίσεις που ταιριάζουν στο προφίλ του. Μην επινοείς στοιχεία.
-- Για κάθε πρόταση, μία σύντομη πρόταση γιατί τον αφορά.
-- Κλείσε με κάλεσμα για μια σύντομη, χωρίς δέσμευση κουβέντα.
-- Στοιχεία επικοινωνίας: Χρήστος Ιατρόπουλος, 6975900189, info@chiinsurancebrokers.com
-- Πρόσθεσε στο τέλος, σε μικρή γραμματοσειρά, ότι μπορεί να εξαιρεθεί από τέτοια ενημερωτικά email απαντώντας «STOP».
-- HTML format, καθαρό, χωρίς υπερβολές. Μέγιστο ~200 λέξεις.
+- Προσφώνηση με μικρό όνομα αν υπάρχει ({first or '—'}), αλλιώς ευγενικά.
+- 1η παράγραφος: ζεστό ξεκίνημα που αναγνωρίζει ότι είναι ήδη πελάτης μας.
+- 2η–3η παράγραφος: γιατί η «{promoted_line}» τον αφορά, με απλά παραδείγματα από την καθημερινότητα. Μην επινοείς τιμές ή στοιχεία.
+- Τελευταία παράγραφος: κάλεσμα για μια σύντομη, χωρίς καμία δέσμευση κουβέντα.
+- ΜΗΝ γράφεις υπογραφή, στοιχεία επικοινωνίας ή «STOP» — τα προσθέτει αυτόματα το σύστημα.
+- 3 έως 4 σύντομες παράγραφοι, συνολικά ~120 λέξεις.
 
-Απάντησε ΜΟΝΟ με JSON: {{"subject": "...", "body_html": "..."}}"""
-    raw = _call_api([{"role": "user", "content": prompt}], max_tokens=1200)
+Απάντησε ΜΟΝΟ με JSON: {{"subject": "σύντομο ελκυστικό θέμα στα ελληνικά", "paragraphs": ["...", "...", "..."]}}"""
+    raw = _call_api([{"role": "user", "content": prompt}], max_tokens=900)
     try:
         clean = raw.strip()
         if clean.startswith("```"):
@@ -180,8 +179,9 @@ def upsell_email(client_data: dict, policies: list, missing_sectors: list) -> di
             if clean.startswith("json"):
                 clean = clean[4:]
         data = json.loads(clean.strip())
-        if data.get("subject") and data.get("body_html"):
-            return data
+        paras = [p.strip() for p in (data.get("paragraphs") or []) if isinstance(p, str) and p.strip()]
+        if data.get("subject") and paras:
+            return {"subject": data["subject"].strip(), "paragraphs": paras}
     except Exception:
         pass
     return {}

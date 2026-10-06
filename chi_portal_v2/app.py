@@ -1420,26 +1420,109 @@ def agent_email_queue():
     return render_template("agent/email_queue.html", emails=data)
 
 # ── HAL MONTHLY UPSELL / CROSS-SELL BATCH ──────────────────────────────────────
-# Core sectors we actively cross-sell. A client missing one of these is a candidate.
-UPSELL_TARGET_SECTORS = ["HEALTH", "LIFE", "MOTOR", "PROPERTY", "TRAVEL", "PET"]
+# One business line is promoted each calendar month (rotation). Clients who are
+# opted in and do NOT already hold that line get a Greek, plain-language email
+# drafted by HAL, wrapped in the branded Ashlar shell, dropped in the queue for
+# review. Nothing is ever sent automatically.
+
+import html as _html
+
+ASHLAR_LOGO = os.getenv("ASHLAR_LOGO_URL",
+    "https://ashlarassurance.com/wp-content/uploads/2026/10/ashlar-logo-header-white-144.png")
+BRAND_NAVY = "#1B2B5E"
+BRAND_GOLD = "#C9A96E"
+
+# Per-sector hero image (public, stable URLs — hotlinked by the recipient's mail client).
+# Overridable via UPSELL_IMAGES env (JSON {"SECTOR": "https://..."}). Sectors with no
+# image still render cleanly with the branded header band.
+SECTOR_IMAGES_DEFAULT = {
+    "HEALTH": "https://ashlarassurance.com/wp-content/uploads/2026/09/vecteezy_team-of-surgeon-doctors-are-performing-heart-surgery_8017103-1536x1024.jpg",
+    "TRAVEL": "https://ashlarassurance.com/wp-content/uploads/2026/09/singapore.jpg",
+}
+
+# Which line is promoted in each calendar month (1-12). Override with UPSELL_ROTATION
+# env = 12 comma-separated sector names. Nov/Dec land on lines that already have imagery.
+UPSELL_ROTATION_DEFAULT = ["HEALTH", "LIFE", "MOTOR", "PROPERTY", "TRAVEL", "PET",
+                           "HEALTH", "PROPERTY", "MOTOR", "TRAVEL", "HEALTH", "TRAVEL"]
+
+_SECTOR_NAMES = [s.name for s in m.PolicySector]
 
 
-def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None):
-    """Build HAL upsell emails for eligible clients and drop them in the email queue
-    as QUEUED/UPSELL rows for human review. Never sends. Respects marketing opt-out
-    and a per-client cooldown. Returns a summary dict."""
+def _sector_images():
+    out = dict(SECTOR_IMAGES_DEFAULT)
+    try:
+        env = os.getenv("UPSELL_IMAGES", "")
+        if env:
+            out.update(json.loads(env))
+    except Exception:
+        pass
+    return out
+
+
+def _sector_of_month(month=None):
+    month = month or date.today().month
+    rot = UPSELL_ROTATION_DEFAULT
+    env = os.getenv("UPSELL_ROTATION", "")
+    if env:
+        parts = [p.strip().upper() for p in env.split(",") if p.strip()]
+        if len(parts) == 12:
+            rot = parts
+    sec = rot[(month - 1) % 12]
+    return sec if sec in _SECTOR_NAMES else "HEALTH"
+
+
+def _render_upsell_html(sector_name, paragraphs):
+    label = m.PolicySector[sector_name].value if sector_name in _SECTOR_NAMES else sector_name
+    img = _sector_images().get(sector_name)
+    body = "".join(
+        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#2b2b2b">{_html.escape(p)}</p>'
+        for p in paragraphs)
+    hero = (f'<tr><td style="padding:0"><img src="{img}" width="600" alt="{_html.escape(label)}" '
+            f'style="display:block;width:100%;max-width:600px;height:auto;border:0"></td></tr>') if img else ""
+    cta_subj = _html.escape(f"Με ενδιαφέρει: {label}").replace(" ", "%20")
+    return f"""<!doctype html><html lang="el"><body style="margin:0;padding:0;background:#f4f5f7">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;border-radius:10px;overflow:hidden;font-family:Helvetica,Arial,sans-serif">
+  <tr><td style="background:{BRAND_NAVY};padding:20px 28px" align="left">
+    <img src="{ASHLAR_LOGO}" alt="Ashlar Assurance" height="34" style="height:34px;display:block;border:0">
+  </td></tr>
+  {hero}
+  <tr><td style="padding:26px 28px 8px">
+    <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:{BRAND_GOLD};font-weight:700;margin-bottom:12px">Η πρόταση του μήνα · {_html.escape(label)}</div>
+    {body}
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0 6px"><tr>
+      <td style="background:{BRAND_GOLD};border-radius:6px">
+        <a href="mailto:info@chiinsurancebrokers.com?subject={cta_subj}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:700;color:{BRAND_NAVY};text-decoration:none">Θέλω να μάθω περισσότερα</a>
+      </td></tr></table>
+  </td></tr>
+  <tr><td style="padding:18px 28px 24px;border-top:1px solid #eee">
+    <p style="margin:0 0 4px;font-size:13px;color:{BRAND_NAVY};font-weight:700">Χρήστος Ιατρόπουλος — Ashlar Assurance</p>
+    <p style="margin:0;font-size:13px;color:#555">📞 6975900189 · ✉️ info@chiinsurancebrokers.com</p>
+    <p style="margin:12px 0 0;font-size:11px;color:#9aa0aa">Λαμβάνετε αυτό το ενημερωτικό email ως πελάτης μας. Αν δεν επιθυμείτε τέτοια μηνύματα, απαντήστε με «STOP» και θα σας εξαιρέσουμε.</p>
+  </td></tr>
+</table></td></tr></table></body></html>"""
+
+
+def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None, sector_name=None):
+    """Build HAL upsell emails for the promoted line of the month and drop them in the
+    email queue as QUEUED/UPSELL rows for review. Never sends. Targets opted-in clients
+    who do NOT already hold that line. Returns a summary dict."""
     from sqlalchemy import or_ as _or
+    sector_name = (sector_name or _sector_of_month())
+    if sector_name not in _SECTOR_NAMES:
+        sector_name = _sector_of_month()
+    label = m.PolicySector[sector_name].value
     cutoff = datetime.now() - timedelta(days=min_days)
-    summary = {"queued": 0, "skipped_no_opportunity": 0, "skipped_recent": 0,
-               "skipped_already_queued": 0, "errors": 0, "considered": 0}
+    summary = {"promoted_line": label, "promoted_sector": sector_name, "queued": 0,
+               "skipped_already_has": 0, "skipped_recent": 0, "skipped_already_queued": 0,
+               "errors": 0, "considered": 0}
 
-    # Clients with an email, opted in (NULL counts as in), that have >=1 active policy.
     cq = db.query(m.Client).filter(
         m.Client.email.isnot(None), m.Client.email != "",
         _or(m.Client.marketing_opt_in.is_(None), m.Client.marketing_opt_in == True),  # noqa: E712
     )
-    clients = cq.order_by(m.Client.vip.desc(), m.Client.id).all()
-    for c in clients:
+    for c in cq.order_by(m.Client.vip.desc(), m.Client.id).all():
         if summary["queued"] >= limit:
             break
         pol_q = db.query(m.Policy).filter_by(client_id=c.id, status=m.PolicyStatus.ACTIVE)
@@ -1449,6 +1532,10 @@ def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None):
         if not active:
             continue
         summary["considered"] += 1
+        held = {p.sector.name for p in active if p.sector}
+        if sector_name in held:                     # already has the promoted line
+            summary["skipped_already_has"] += 1
+            continue
         if c.last_upsell_email and c.last_upsell_email > cutoff:
             summary["skipped_recent"] += 1
             continue
@@ -1456,25 +1543,20 @@ def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None):
                                             email_type="UPSELL").first():
             summary["skipped_already_queued"] += 1
             continue
-        held = {p.sector.name for p in active if p.sector}
-        missing = [m.PolicySector[s].value for s in UPSELL_TARGET_SECTORS if s not in held]
-        if not missing:
-            summary["skipped_no_opportunity"] += 1
-            continue
         anchor = max(active, key=lambda p: (p.premium or 0))
         pol_payload = [{"sector": p.sector.value if p.sector else "", "type": p.policy_type or "",
-                        "provider": p.provider or "", "premium": round(float(p.premium or 0), 2),
-                        "expiry": str(p.expiration_date) if p.expiration_date else ""} for p in active]
+                        "provider": p.provider or "", "premium": round(float(p.premium or 0), 2)}
+                       for p in active]
         try:
-            email = hal.upsell_email(
+            copy = hal.upsell_copy(
                 {"name": c.name, "profession": c.profession, "city": c.city},
-                pol_payload, missing)
-            if not email:
+                pol_payload, label)
+            if not copy:
                 summary["errors"] += 1
                 continue
             db.add(m.EmailQueue(
                 client_id=c.id, policy_id=anchor.id, recipient_email=c.email,
-                subject=email["subject"], body_html=email["body_html"],
+                subject=copy["subject"], body_html=_render_upsell_html(sector_name, copy["paragraphs"]),
                 status=m.EmailStatus.QUEUED, email_type="UPSELL"))
             c.last_upsell_email = datetime.now()
             db.commit()
@@ -1489,17 +1571,19 @@ def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None):
 @app.route("/admin/upsell/generate", methods=["POST"])
 @agent_required
 def admin_upsell_generate():
-    """Manual trigger: build the monthly upsell batch into the queue for review.
+    """Manual trigger: build this month's promoted-line batch into the queue for review.
     Admin builds office-wide; a scoped external agent builds only their own clients."""
     scope = get_agent_scope()
     limit = request.form.get("limit", 50, type=int)
+    sector = (request.form.get("sector") or "").strip().upper() or None
     db = m.get_session()
     try:
-        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 200), agent_code=scope)
+        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 200),
+                                         agent_code=scope, sector_name=sector)
     finally:
         db.close()
-    flash(f"🤖 HAL upsell: {summary['queued']} email μπήκαν στην ουρά για έλεγχο "
-          f"(εξετάστηκαν {summary['considered']}, χωρίς ευκαιρία {summary['skipped_no_opportunity']}, "
+    flash(f"🤖 HAL — προβολή «{summary['promoted_line']}»: {summary['queued']} email στην ουρά για έλεγχο "
+          f"(εξετάστηκαν {summary['considered']}, έχουν ήδη {summary['skipped_already_has']}, "
           f"πρόσφατα {summary['skipped_recent']}, ήδη σε ουρά {summary['skipped_already_queued']}).",
           "success" if summary["queued"] else "info")
     return redirect(url_for("agent_email_queue"))
@@ -1508,7 +1592,7 @@ def admin_upsell_generate():
 @app.route("/api/upsell/run", methods=["POST", "GET"])
 def api_upsell_run():
     """Keyed endpoint for the monthly scheduler. Office-wide, queue-only (no send).
-    Protect with UPSELL_KEY env var: /api/upsell/run?key=..."""
+    Protect with UPSELL_KEY env var: /api/upsell/run?key=...  Optional ?sector=HEALTH."""
     expected = os.getenv("UPSELL_KEY", "")
     key = request.args.get("key", "")
     if not key and request.is_json:
@@ -1516,13 +1600,13 @@ def api_upsell_run():
     if not expected or key != expected:
         return jsonify({"error": "unauthorized"}), 401
     limit = request.args.get("limit", 100, type=int)
+    sector = (request.args.get("sector") or "").strip().upper() or None
     db = m.get_session()
     try:
-        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 300))
+        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 300), sector_name=sector)
     finally:
         db.close()
     return jsonify(summary)
-
 
 @app.route("/agent/email/<int:eq_id>/send", methods=["POST"])
 @agent_required
