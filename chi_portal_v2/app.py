@@ -65,17 +65,20 @@ def _run_migrations():
         pass
     try:
         engine = m.get_engine()
-        with engine.connect() as conn:
-            for sql in [
-                "ALTER TABLE users ADD COLUMN agent_code VARCHAR(20)",
-                "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE clients ADD COLUMN marketing_opt_in BOOLEAN DEFAULT TRUE",
-                "ALTER TABLE clients ADD COLUMN last_upsell_email TIMESTAMP",
-                "ALTER TABLE email_queue ADD COLUMN email_type VARCHAR(20) DEFAULT 'RENEWAL'",
-            ]:
-                try:
+        for sql in [
+            "ALTER TABLE users ADD COLUMN agent_code VARCHAR(20)",
+            "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE clients ADD COLUMN marketing_opt_in BOOLEAN DEFAULT TRUE",
+            "ALTER TABLE clients ADD COLUMN last_upsell_email TIMESTAMP",
+            "ALTER TABLE email_queue ADD COLUMN email_type VARCHAR(20) DEFAULT 'RENEWAL'",
+        ]:
+            # Fresh connection per statement: a failing ALTER (e.g. column already
+            # exists) aborts only its own transaction, so later NEW columns still apply.
+            try:
+                with engine.connect() as conn:
                     conn.execute(_text(sql)); conn.commit()
-                except Exception: pass
+            except Exception:
+                pass
     except Exception:
         pass
 
