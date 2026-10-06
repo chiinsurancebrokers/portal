@@ -1439,9 +1439,19 @@ BRAND_GOLD = "#C9A96E"
 # Overridable via UPSELL_IMAGES env (JSON {"SECTOR": "https://..."}). Sectors with no
 # image still render cleanly with the branded header band.
 SECTOR_IMAGES_DEFAULT = {
-    "HEALTH": "https://ashlarassurance.com/wp-content/uploads/2026/09/vecteezy_team-of-surgeon-doctors-are-performing-heart-surgery_8017103-1536x1024.jpg",
+    "HEALTH": "https://portalchiinsurance.up.railway.app/static/upsell/health.jpg",
     "TRAVEL": "https://ashlarassurance.com/wp-content/uploads/2026/09/singapore.jpg",
 }
+
+# Public-facing contact + site, used in the email footer and CTA.
+ASHLAR_CONTACT_EMAIL = os.getenv("ASHLAR_CONTACT_EMAIL", "c.iatropoulos@ashlarassurance.com")
+ASHLAR_SITE_URL = os.getenv("ASHLAR_SITE_URL", "https://www.ashlarassurance.com")
+# Email sender identity (Brevo). The FROM domain must be authenticated in Brevo
+# (SPF/DKIM) or sends will be rejected — see MAIL_FROM_EMAIL env to change it.
+MAIL_FROM_EMAIL = os.getenv("MAIL_FROM_EMAIL", "info@ashlarassurance.com")
+MAIL_FROM_NAME  = os.getenv("MAIL_FROM_NAME", "Ashlar Assurance")
+MAIL_REPLY_TO   = os.getenv("MAIL_REPLY_TO", ASHLAR_CONTACT_EMAIL)
+MAIL_BCC        = os.getenv("MAIL_BCC", MAIL_FROM_EMAIL)
 
 # Which line is promoted in each calendar month (1-12). Override with UPSELL_ROTATION
 # env = 12 comma-separated sector names. Nov/Dec land on lines that already have imagery.
@@ -1496,12 +1506,13 @@ def _render_upsell_html(sector_name, paragraphs):
     {body}
     <table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0 6px"><tr>
       <td style="background:{BRAND_GOLD};border-radius:6px">
-        <a href="mailto:info@chiinsurancebrokers.com?subject={cta_subj}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:700;color:{BRAND_NAVY};text-decoration:none">Θέλω να μάθω περισσότερα</a>
+        <a href="mailto:{ASHLAR_CONTACT_EMAIL}?subject={cta_subj}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:700;color:{BRAND_NAVY};text-decoration:none">Θέλω να μάθω περισσότερα</a>
       </td></tr></table>
   </td></tr>
   <tr><td style="padding:18px 28px 24px;border-top:1px solid #eee">
     <p style="margin:0 0 4px;font-size:13px;color:{BRAND_NAVY};font-weight:700">Χρήστος Ιατρόπουλος — Ashlar Assurance</p>
-    <p style="margin:0;font-size:13px;color:#555">📞 6975900189 · ✉️ info@chiinsurancebrokers.com</p>
+    <p style="margin:0;font-size:13px;color:#555">📞 6975900189 · ✉️ <a href="mailto:{ASHLAR_CONTACT_EMAIL}" style="color:{BRAND_NAVY};text-decoration:none">{ASHLAR_CONTACT_EMAIL}</a></p>
+    <p style="margin:6px 0 0;font-size:13px;color:#555">🌐 <a href="{ASHLAR_SITE_URL}" style="color:{BRAND_NAVY};text-decoration:none;font-weight:600">www.ashlarassurance.com</a></p>
     <p style="margin:12px 0 0;font-size:11px;color:#9aa0aa">Λαμβάνετε αυτό το ενημερωτικό email ως πελάτης μας. Αν δεν επιθυμείτε τέτοια μηνύματα, απαντήστε με «STOP» και θα σας εξαιρέσουμε.</p>
   </td></tr>
 </table></td></tr></table></body></html>"""
@@ -4366,9 +4377,10 @@ def _brevo_send(to_email: str, to_name: str, subject: str, body_html: str) -> tu
         return False, "BREVO_API_KEY not set"
     
     payload = {
-        "sender": {"name": "CHI Insurance Brokers", "email": "xiatropoulos@gmail.com"},
+        "sender": {"name": MAIL_FROM_NAME, "email": MAIL_FROM_EMAIL},
+        "replyTo": {"email": MAIL_REPLY_TO, "name": MAIL_FROM_NAME},
         "to": [{"email": to_email, "name": to_name}],
-        "bcc": [{"email": "xiatropoulos@gmail.com", "name": "CHI Archive"}],
+        "bcc": [{"email": MAIL_BCC, "name": "Ashlar Archive"}],
         "subject": subject,
         "htmlContent": body_html
     }
@@ -4399,10 +4411,11 @@ def _brevo_smtp_send(to_email: str, to_name: str, subject: str, body_html: str) 
 
     def _build_msg(from_addr):
         msg = MIMEMultipart("alternative")
-        msg["Subject"] = subject
-        msg["From"]    = f"CHI Insurance Brokers <{from_addr}>"
-        msg["To"]      = f"{to_name} <{to_email}>"
-        msg["Bcc"]     = "xiatropoulos@gmail.com"
+        msg["Subject"]  = subject
+        msg["From"]     = f"{MAIL_FROM_NAME} <{from_addr}>"
+        msg["Reply-To"] = MAIL_REPLY_TO
+        msg["To"]       = f"{to_name} <{to_email}>"
+        msg["Bcc"]      = MAIL_BCC
         msg.attach(MIMEText(body_html, "html", "utf-8"))
         return msg
 
@@ -4417,7 +4430,7 @@ def _brevo_smtp_send(to_email: str, to_name: str, subject: str, body_html: str) 
             with smtplib.SMTP("smtp.gmail.com", 587, timeout=30) as srv:
                 srv.ehlo(); srv.starttls(); srv.ehlo()
                 srv.login(gmail_user, gmail_pass)
-                recipients = list({to_email, "xiatropoulos@gmail.com"})
+                recipients = list({to_email, MAIL_BCC})
                 srv.sendmail(gmail_user, recipients, msg.as_string())
             return True, ""
         except Exception as e:
@@ -4430,12 +4443,12 @@ def _brevo_smtp_send(to_email: str, to_name: str, subject: str, body_html: str) 
     brevo_pass = os.getenv("BREVO_SMTP_PASS", "")
     if brevo_user and brevo_pass:
         try:
-            msg = _build_msg("xiatropoulos@gmail.com")
+            msg = _build_msg(MAIL_FROM_EMAIL)
             with smtplib.SMTP("smtp-relay.brevo.com", 587, timeout=30) as srv:
                 srv.ehlo(); srv.starttls(); srv.ehlo()
                 srv.login(brevo_user, brevo_pass)
-                recipients = list({to_email, "xiatropoulos@gmail.com"})
-                srv.sendmail("xiatropoulos@gmail.com", recipients, msg.as_string())
+                recipients = list({to_email, MAIL_BCC})
+                srv.sendmail(MAIL_FROM_EMAIL, recipients, msg.as_string())
             return True, ""
         except Exception as e:
             last_error += f" | Brevo SMTP error: {e}"
