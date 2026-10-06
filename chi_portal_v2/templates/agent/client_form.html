@@ -81,6 +81,14 @@
           <label class="form-check-label fw-semibold" for="vip">VIP Πελάτης</label>
         </div>
       </div>
+      <div class="col-md-3 d-flex align-items-end">
+        <div class="form-check mb-2">
+          <input class="form-check-input" type="checkbox" name="marketing_opt_in" id="marketing_opt_in"
+                 {% if (not client) or client.get('marketing_opt_in', True) %}checked{% endif %}>
+          <label class="form-check-label fw-semibold" for="marketing_opt_in">Ενημερωτικά / προσφορές (HAL)</label>
+          <div class="text-muted" style="font-size:11px">Ξεμαρκάρετε για εξαίρεση από upselling email.</div>
+        </div>
+      </div>
       <div class="col-12">
         <label class="form-label fw-semibold" style="font-size:13px">Σημειώσεις</label>
         <textarea name="notes" class="form-control" rows="3">{{ client.notes if client else '' }}</textarea>

@@ -2,14 +2,29 @@
 {% block title %}Email Queue — CHI{% endblock %}
 {% block page_title %}<i class="fas fa-envelope me-2" style="color:#C9A96E"></i>Email Queue{% endblock %}
 {% block content %}
+<div class="chi-card mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+  <div style="font-size:13px;color:#475569">
+    <i class="fas fa-robot me-1" style="color:#C9A96E"></i>
+    Ο HAL αναλύει κάθε πελάτη και ετοιμάζει email upselling/cross-selling. Μπαίνουν <strong>στη σειρά για έλεγχο</strong> — τίποτα δεν στέλνεται αυτόματα. Εξαιρούνται όσοι πελάτες έχουν ξεμαρκαριστεί από τα ενημερωτικά.
+  </div>
+  <form method="POST" action="{{ url_for('admin_upsell_generate') }}" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').innerHTML='⏳ Ανάλυση...'">
+    <button type="submit" class="btn btn-sm btn-gold" style="font-size:12px;white-space:nowrap">
+      <i class="fas fa-wand-magic-sparkles me-1"></i>Δημιουργία batch upsell
+    </button>
+  </form>
+</div>
 <div class="chi-card">
   <table class="chi-table">
-    <thead><tr><th>Πελάτης</th><th>Ασφαλιστήριο</th><th>Email</th><th>Θέμα</th><th>Κατάσταση</th><th>Ημ. Δημ.</th><th></th></tr></thead>
+    <thead><tr><th>Πελάτης</th><th>Τύπος</th><th>Ασφαλιστήριο</th><th>Email</th><th>Θέμα</th><th>Κατάσταση</th><th>Ημ. Δημ.</th><th></th></tr></thead>
     <tbody>
       {% for row in emails %}
       {% set e = row.eq %}
       <tr>
         <td class="fw-semibold" style="color:#1B2B5E">{{ row.client_name }}</td>
+        <td>
+          {% if e.email_type=='UPSELL' %}<span class="status-badge badge-vip" style="font-size:10px">Upsell</span>
+          {% else %}<span class="status-badge" style="font-size:10px;background:#E2E8F0;color:#475569">Ανανέωση</span>{% endif %}
+        </td>
         <td style="font-size:12px">{{ row.policy_type }}</td>
         <td style="font-size:12px">{{ e.recipient_email }}</td>
         <td style="font-size:12px">{{ (e.subject or '')[:50] }}</td>
@@ -32,7 +47,7 @@
         </td>
       </tr>
       {% else %}
-      <tr><td colspan="7" class="text-center py-5" style="color:#94A3B8">Δεν υπάρχουν emails στη σειρά</td></tr>
+      <tr><td colspan="8" class="text-center py-5" style="color:#94A3B8">Δεν υπάρχουν emails στη σειρά</td></tr>
       {% endfor %}
     </tbody>
   </table>

@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 
 import models as m
 import hal_engine as hal
+import hal_scope
 
 # ── APP SETUP ──────────────────────────────────────────────────────────────────
 
@@ -68,6 +69,9 @@ def _run_migrations():
             for sql in [
                 "ALTER TABLE users ADD COLUMN agent_code VARCHAR(20)",
                 "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE clients ADD COLUMN marketing_opt_in BOOLEAN DEFAULT TRUE",
+                "ALTER TABLE clients ADD COLUMN last_upsell_email TIMESTAMP",
+                "ALTER TABLE email_queue ADD COLUMN email_type VARCHAR(20) DEFAULT 'RENEWAL'",
             ]:
                 try:
                     conn.execute(_text(sql)); conn.commit()
@@ -822,7 +826,8 @@ def agent_add_client():
                 city=request.form.get("city"), tax_id=tax_id or None,
                 id_number=request.form.get("id_number"), date_of_birth=dob,
                 profession=request.form.get("profession"), company_name=request.form.get("company_name"),
-                notes=request.form.get("notes"), vip=bool(request.form.get("vip"))
+                notes=request.form.get("notes"), vip=bool(request.form.get("vip")),
+                marketing_opt_in=bool(request.form.get("marketing_opt_in"))
             )
             db.add(client)
             db.commit()
@@ -849,7 +854,7 @@ def agent_client_detail(client_id):
     db = m.get_session()
     try:
         client = db.query(m.Client).get(client_id)
-        if not client:
+        if not client or not hal_scope.can_access_client(db, hal_scope.scope_from_session(session), client_id):
             abort(404)
         policies = db.query(m.Policy).filter_by(client_id=client_id).order_by(m.Policy.expiration_date).all()
         today = date.today()
@@ -1069,6 +1074,7 @@ def agent_edit_client(client_id):
             client.company_name= request.form.get("company_name")
             client.notes       = request.form.get("notes")
             client.vip         = bool(request.form.get("vip"))
+            client.marketing_opt_in = bool(request.form.get("marketing_opt_in"))
             client.updated_date = datetime.now()
             db.commit()
             flash("✅ Στοιχεία πελάτη ενημερώθηκαν.", "success")
@@ -1242,7 +1248,8 @@ def agent_delete_policy(policy_id):
 def agent_hal_policy(policy_id):
     db = m.get_session()
     policy = db.query(m.Policy).get(policy_id)
-    if not policy:
+    if not policy or not hal_scope.can_access_policy(db, hal_scope.scope_from_session(session), policy_id):
+        db.close()
         abort(404)
     client = db.query(m.Client).get(policy.client_id)
     explanation = policy.hal_summary
@@ -1267,8 +1274,12 @@ def agent_hal_policy(policy_id):
 @agent_required
 def agent_hal_upsell(client_id):
     db = m.get_session()
+    scope = hal_scope.scope_from_session(session)
     client = db.query(m.Client).get(client_id)
-    policies = db.query(m.Policy).filter_by(client_id=client_id, status=m.PolicyStatus.ACTIVE).all()
+    if not client or not hal_scope.can_access_client(db, scope, client_id):
+        db.close()
+        abort(404)
+    policies = hal_scope.policies_q(db, scope).filter_by(client_id=client_id, status=m.PolicyStatus.ACTIVE).all()
     client_data = {"name": client.name, "profession": client.profession,
                    "city": client.city, "company": client.company_name}
     pol_list = [{"type": p.policy_type, "sector": p.sector.value if p.sector else "",
@@ -1281,10 +1292,16 @@ def agent_hal_upsell(client_id):
 @app.route("/agent/hal/chat", methods=["POST"])
 @agent_required
 def agent_hal_chat():
+    """Staff HAL. Data access is decided by the server-side session, never by the request:
+    admin/backoffice see the whole book, scoped agents only their own policies/clients."""
     data = request.json or {}
-    messages = data.get("messages", [])
-    context = data.get("context", "")
-    response = hal.chat(messages, context)
+    messages = hal.sanitize_messages(data.get("messages", []))
+    if not messages:
+        return jsonify({"response": "Γράψε μια ερώτηση."})
+    scope  = hal_scope.scope_from_session(session)
+    system = hal_scope.system_prompt(hal.CHI_SYSTEM_CONTEXT, scope)
+    response = hal.chat_with_tools(messages, system, hal_scope.tools_for(scope),
+                                   hal_scope.make_executor(scope))
     return jsonify({"response": response})
 
 # Agent: Renewals (Ληξιάριο)
@@ -1356,7 +1373,7 @@ def agent_renewals():
 def agent_hal_renewal_draft(policy_id):
     db = m.get_session()
     policy = db.query(m.Policy).get(policy_id)
-    if not policy:
+    if not policy or not hal_scope.can_access_policy(db, hal_scope.scope_from_session(session), policy_id):
         db.close(); return jsonify({"error": "Not found"}), 404
     client = db.query(m.Client).get(policy.client_id)
     today  = date.today()
@@ -1401,6 +1418,195 @@ def agent_email_queue():
                      "policy_type": p.policy_type if p else "—"})
     db.close()
     return render_template("agent/email_queue.html", emails=data)
+
+# ── HAL MONTHLY UPSELL / CROSS-SELL BATCH ──────────────────────────────────────
+# One business line is promoted each calendar month (rotation). Clients who are
+# opted in and do NOT already hold that line get a Greek, plain-language email
+# drafted by HAL, wrapped in the branded Ashlar shell, dropped in the queue for
+# review. Nothing is ever sent automatically.
+
+import html as _html
+
+ASHLAR_LOGO = os.getenv("ASHLAR_LOGO_URL",
+    "https://ashlarassurance.com/wp-content/uploads/2026/10/ashlar-logo-header-white-144.png")
+BRAND_NAVY = "#1B2B5E"
+BRAND_GOLD = "#C9A96E"
+
+# Per-sector hero image (public, stable URLs — hotlinked by the recipient's mail client).
+# Overridable via UPSELL_IMAGES env (JSON {"SECTOR": "https://..."}). Sectors with no
+# image still render cleanly with the branded header band.
+SECTOR_IMAGES_DEFAULT = {
+    "HEALTH": "https://ashlarassurance.com/wp-content/uploads/2026/09/vecteezy_team-of-surgeon-doctors-are-performing-heart-surgery_8017103-1536x1024.jpg",
+    "TRAVEL": "https://ashlarassurance.com/wp-content/uploads/2026/09/singapore.jpg",
+}
+
+# Which line is promoted in each calendar month (1-12). Override with UPSELL_ROTATION
+# env = 12 comma-separated sector names. Nov/Dec land on lines that already have imagery.
+UPSELL_ROTATION_DEFAULT = ["HEALTH", "LIFE", "MOTOR", "PROPERTY", "TRAVEL", "PET",
+                           "HEALTH", "PROPERTY", "MOTOR", "TRAVEL", "HEALTH", "TRAVEL"]
+
+_SECTOR_NAMES = [s.name for s in m.PolicySector]
+
+
+def _sector_images():
+    out = dict(SECTOR_IMAGES_DEFAULT)
+    try:
+        env = os.getenv("UPSELL_IMAGES", "")
+        if env:
+            out.update(json.loads(env))
+    except Exception:
+        pass
+    return out
+
+
+def _sector_of_month(month=None):
+    month = month or date.today().month
+    rot = UPSELL_ROTATION_DEFAULT
+    env = os.getenv("UPSELL_ROTATION", "")
+    if env:
+        parts = [p.strip().upper() for p in env.split(",") if p.strip()]
+        if len(parts) == 12:
+            rot = parts
+    sec = rot[(month - 1) % 12]
+    return sec if sec in _SECTOR_NAMES else "HEALTH"
+
+
+def _render_upsell_html(sector_name, paragraphs):
+    label = m.PolicySector[sector_name].value if sector_name in _SECTOR_NAMES else sector_name
+    img = _sector_images().get(sector_name)
+    body = "".join(
+        f'<p style="margin:0 0 14px;font-size:15px;line-height:1.6;color:#2b2b2b">{_html.escape(p)}</p>'
+        for p in paragraphs)
+    hero = (f'<tr><td style="padding:0"><img src="{img}" width="600" alt="{_html.escape(label)}" '
+            f'style="display:block;width:100%;max-width:600px;height:auto;border:0"></td></tr>') if img else ""
+    cta_subj = _html.escape(f"Με ενδιαφέρει: {label}").replace(" ", "%20")
+    return f"""<!doctype html><html lang="el"><body style="margin:0;padding:0;background:#f4f5f7">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f5f7;padding:24px 0">
+<tr><td align="center">
+<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:600px;max-width:600px;background:#ffffff;border-radius:10px;overflow:hidden;font-family:Helvetica,Arial,sans-serif">
+  <tr><td style="background:{BRAND_NAVY};padding:20px 28px" align="left">
+    <img src="{ASHLAR_LOGO}" alt="Ashlar Assurance" height="34" style="height:34px;display:block;border:0">
+  </td></tr>
+  {hero}
+  <tr><td style="padding:26px 28px 8px">
+    <div style="font-size:11px;letter-spacing:1px;text-transform:uppercase;color:{BRAND_GOLD};font-weight:700;margin-bottom:12px">Η πρόταση του μήνα · {_html.escape(label)}</div>
+    {body}
+    <table role="presentation" cellpadding="0" cellspacing="0" style="margin:18px 0 6px"><tr>
+      <td style="background:{BRAND_GOLD};border-radius:6px">
+        <a href="mailto:info@chiinsurancebrokers.com?subject={cta_subj}" style="display:inline-block;padding:12px 22px;font-size:14px;font-weight:700;color:{BRAND_NAVY};text-decoration:none">Θέλω να μάθω περισσότερα</a>
+      </td></tr></table>
+  </td></tr>
+  <tr><td style="padding:18px 28px 24px;border-top:1px solid #eee">
+    <p style="margin:0 0 4px;font-size:13px;color:{BRAND_NAVY};font-weight:700">Χρήστος Ιατρόπουλος — Ashlar Assurance</p>
+    <p style="margin:0;font-size:13px;color:#555">📞 6975900189 · ✉️ info@chiinsurancebrokers.com</p>
+    <p style="margin:12px 0 0;font-size:11px;color:#9aa0aa">Λαμβάνετε αυτό το ενημερωτικό email ως πελάτης μας. Αν δεν επιθυμείτε τέτοια μηνύματα, απαντήστε με «STOP» και θα σας εξαιρέσουμε.</p>
+  </td></tr>
+</table></td></tr></table></body></html>"""
+
+
+def _generate_upsell_batch(db, limit=50, min_days=25, agent_code=None, sector_name=None):
+    """Build HAL upsell emails for the promoted line of the month and drop them in the
+    email queue as QUEUED/UPSELL rows for review. Never sends. Targets opted-in clients
+    who do NOT already hold that line. Returns a summary dict."""
+    from sqlalchemy import or_ as _or
+    sector_name = (sector_name or _sector_of_month())
+    if sector_name not in _SECTOR_NAMES:
+        sector_name = _sector_of_month()
+    label = m.PolicySector[sector_name].value
+    cutoff = datetime.now() - timedelta(days=min_days)
+    summary = {"promoted_line": label, "promoted_sector": sector_name, "queued": 0,
+               "skipped_already_has": 0, "skipped_recent": 0, "skipped_already_queued": 0,
+               "errors": 0, "considered": 0}
+
+    cq = db.query(m.Client).filter(
+        m.Client.email.isnot(None), m.Client.email != "",
+        _or(m.Client.marketing_opt_in.is_(None), m.Client.marketing_opt_in == True),  # noqa: E712
+    )
+    for c in cq.order_by(m.Client.vip.desc(), m.Client.id).all():
+        if summary["queued"] >= limit:
+            break
+        pol_q = db.query(m.Policy).filter_by(client_id=c.id, status=m.PolicyStatus.ACTIVE)
+        if agent_code:
+            pol_q = pol_q.filter(m.Policy.agent == agent_code)
+        active = pol_q.all()
+        if not active:
+            continue
+        summary["considered"] += 1
+        held = {p.sector.name for p in active if p.sector}
+        if sector_name in held:                     # already has the promoted line
+            summary["skipped_already_has"] += 1
+            continue
+        if c.last_upsell_email and c.last_upsell_email > cutoff:
+            summary["skipped_recent"] += 1
+            continue
+        if db.query(m.EmailQueue).filter_by(client_id=c.id, status=m.EmailStatus.QUEUED,
+                                            email_type="UPSELL").first():
+            summary["skipped_already_queued"] += 1
+            continue
+        anchor = max(active, key=lambda p: (p.premium or 0))
+        pol_payload = [{"sector": p.sector.value if p.sector else "", "type": p.policy_type or "",
+                        "provider": p.provider or "", "premium": round(float(p.premium or 0), 2)}
+                       for p in active]
+        try:
+            copy = hal.upsell_copy(
+                {"name": c.name, "profession": c.profession, "city": c.city},
+                pol_payload, label)
+            if not copy:
+                summary["errors"] += 1
+                continue
+            db.add(m.EmailQueue(
+                client_id=c.id, policy_id=anchor.id, recipient_email=c.email,
+                subject=copy["subject"], body_html=_render_upsell_html(sector_name, copy["paragraphs"]),
+                status=m.EmailStatus.QUEUED, email_type="UPSELL"))
+            c.last_upsell_email = datetime.now()
+            db.commit()
+            summary["queued"] += 1
+        except Exception as e:
+            db.rollback()
+            summary["errors"] += 1
+            app.logger.warning("upsell batch error for client %s: %s", c.id, e)
+    return summary
+
+
+@app.route("/admin/upsell/generate", methods=["POST"])
+@agent_required
+def admin_upsell_generate():
+    """Manual trigger: build this month's promoted-line batch into the queue for review.
+    Admin builds office-wide; a scoped external agent builds only their own clients."""
+    scope = get_agent_scope()
+    limit = request.form.get("limit", 50, type=int)
+    sector = (request.form.get("sector") or "").strip().upper() or None
+    db = m.get_session()
+    try:
+        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 200),
+                                         agent_code=scope, sector_name=sector)
+    finally:
+        db.close()
+    flash(f"🤖 HAL — προβολή «{summary['promoted_line']}»: {summary['queued']} email στην ουρά για έλεγχο "
+          f"(εξετάστηκαν {summary['considered']}, έχουν ήδη {summary['skipped_already_has']}, "
+          f"πρόσφατα {summary['skipped_recent']}, ήδη σε ουρά {summary['skipped_already_queued']}).",
+          "success" if summary["queued"] else "info")
+    return redirect(url_for("agent_email_queue"))
+
+
+@app.route("/api/upsell/run", methods=["POST", "GET"])
+def api_upsell_run():
+    """Keyed endpoint for the monthly scheduler. Office-wide, queue-only (no send).
+    Protect with UPSELL_KEY env var: /api/upsell/run?key=...  Optional ?sector=HEALTH."""
+    expected = os.getenv("UPSELL_KEY", "")
+    key = request.args.get("key", "")
+    if not key and request.is_json:
+        key = (request.get_json(silent=True) or {}).get("key", "")
+    if not expected or key != expected:
+        return jsonify({"error": "unauthorized"}), 401
+    limit = request.args.get("limit", 100, type=int)
+    sector = (request.args.get("sector") or "").strip().upper() or None
+    db = m.get_session()
+    try:
+        summary = _generate_upsell_batch(db, limit=min(max(limit, 1), 300), sector_name=sector)
+    finally:
+        db.close()
+    return jsonify(summary)
 
 @app.route("/agent/email/<int:eq_id>/send", methods=["POST"])
 @agent_required
@@ -1903,10 +2109,23 @@ def _build_hal_context(client, policies) -> str:
 @app.route("/client/hal/chat", methods=["POST"])
 @client_required
 def client_hal_chat():
+    """Client HAL. Context is rebuilt server-side from the logged-in client only;
+    any 'context' sent by the browser is ignored."""
+    if session.get("role") != "client" or not session.get("client_id"):
+        return jsonify({"response": "Δεν επιτρέπεται."}), 403
     data = request.json or {}
-    messages = data.get("messages", [])
-    context  = data.get("context", "")
-    response = hal.chat(messages, context)
+    messages = hal.sanitize_messages(data.get("messages", []))
+    if not messages:
+        return jsonify({"response": "Γράψε μια ερώτηση."})
+    scope = hal_scope.scope_from_session(session)
+    db = m.get_session()
+    try:
+        context = hal_scope.client_context(db, scope)
+    finally:
+        db.close()
+    system = hal_scope.system_prompt(hal.CHI_SYSTEM_CONTEXT, scope, context)
+    response = hal.chat_with_tools(messages, system, hal_scope.tools_for(scope),
+                                   hal_scope.make_executor(scope))
     return jsonify({"response": response})
 
 # ══════════════════════════════════════════════════════════════════════════════

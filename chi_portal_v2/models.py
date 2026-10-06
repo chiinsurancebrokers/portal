@@ -141,6 +141,8 @@ class Client(Base):
     notes         = Column(Text)
     vip           = Column(Boolean, default=False)
     portal_access = Column(Boolean, default=False)
+    marketing_opt_in = Column(Boolean, default=True)   # upsell/marketing emails; uncheck = opt out
+    last_upsell_email = Column(DateTime)               # when HAL last queued an upsell email
     created_date  = Column(DateTime, default=datetime.now)
     updated_date  = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
@@ -338,6 +340,7 @@ class EmailQueue(Base):
     subject         = Column(String(500))
     body_html       = Column(Text)
     status          = Column(SQLEnum(EmailStatus), default=EmailStatus.QUEUED)
+    email_type      = Column(String(20), default="RENEWAL")   # RENEWAL | UPSELL
     sent_at         = Column(DateTime)
     error_message   = Column(String(1000))
     created_date    = Column(DateTime, default=datetime.now)
@@ -415,6 +418,8 @@ def ser_client(c) -> dict:
         "profession": c.profession or "", "company_name": c.company_name or "",
         "notes": c.notes or "", "vip": bool(c.vip),
         "portal_access": bool(c.portal_access),
+        "marketing_opt_in": bool(c.marketing_opt_in) if c.marketing_opt_in is not None else True,
+        "last_upsell_email": _d(c.last_upsell_email),
         "created_date": _d(c.created_date),
     }
 
@@ -536,6 +541,7 @@ def ser_email_queue(e) -> dict:
         "payment_id": e.payment_id, "recipient_email": e.recipient_email or "",
         "subject": e.subject or "", "body_html": e.body_html or "",
         "status": _d(e.status), "status_name": e.status.name if e.status else "QUEUED",
+        "email_type": getattr(e, "email_type", None) or "RENEWAL",
         "sent_at": _d(e.sent_at), "error_message": e.error_message or "",
         "created_date": _d(e.created_date),
     }
