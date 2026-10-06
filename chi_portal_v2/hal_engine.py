@@ -163,6 +163,57 @@ def lixiario_insights(month_data: list, month: int, year: int) -> str:
     return _call_api([{"role": "user", "content": prompt}], max_tokens=800)
 
 
+def sanitize_messages(messages, max_turns: int = 20, max_chars: int = 4000) -> list:
+    """Accept only plain-text user/assistant turns from the browser.
+    Drops any structured blocks (tool_use / tool_result) a client might try to forge."""
+    out = []
+    for msg in (messages or [])[-max_turns:]:
+        if not isinstance(msg, dict):
+            continue
+        role, content = msg.get("role"), msg.get("content")
+        if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+            out.append({"role": role, "content": content[:max_chars]})
+    while out and out[0]["role"] != "user":
+        out.pop(0)
+    return out
+
+
+def chat_with_tools(messages: list, system: str, tools: list, run_tool,
+                    max_rounds: int = 6, max_tokens: int = 1500) -> str:
+    """HAL chat with server-side tools. run_tool(name, input) -> str is already scoped."""
+    if not tools:
+        return _call_api(messages, system=system, max_tokens=max_tokens)
+    api_key = os.getenv("ANTHROPIC_API_KEY", "")
+    if not api_key:
+        return "⚠️ HAL δεν είναι διαθέσιμος. Ρυθμίστε το ANTHROPIC_API_KEY στο Railway."
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01",
+               "content-type": "application/json"}
+    convo = list(messages)
+    try:
+        for _ in range(max_rounds):
+            r = requests.post(ANTHROPIC_API_URL, headers=headers, timeout=90, json={
+                "model": MODEL, "max_tokens": max_tokens, "system": system,
+                "tools": tools, "messages": convo})
+            r.raise_for_status()
+            data = r.json()
+            blocks = data.get("content", [])
+            if data.get("stop_reason") != "tool_use":
+                return "\n".join(b.get("text", "") for b in blocks if b.get("type") == "text").strip() \
+                    or "⚠️ HAL δεν επέστρεψε απάντηση."
+            convo.append({"role": "assistant", "content": blocks})
+            results = []
+            for b in blocks:
+                if b.get("type") == "tool_use":
+                    results.append({"type": "tool_result", "tool_use_id": b["id"],
+                                    "content": run_tool(b["name"], b.get("input") or {})})
+            convo.append({"role": "user", "content": results})
+        return "⚠️ HAL χρειάστηκε πολλά βήματα. Δοκιμάστε πιο συγκεκριμένη ερώτηση."
+    except requests.exceptions.Timeout:
+        return "⚠️ HAL timeout. Δοκιμάστε ξανά."
+    except Exception as e:
+        return f"⚠️ HAL error: {str(e)[:200]}"
+
+
 def chat(messages: list, context: str = "") -> str:
     """General HAL chat with optional context."""
     system = CHI_SYSTEM_CONTEXT

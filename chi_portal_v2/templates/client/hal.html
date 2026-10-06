@@ -43,7 +43,6 @@
 {% block scripts %}
 <script>
 const messages = [];
-const ctx = {{ context|tojson }};
 // Ασφαλής, ελάχιστος Markdown renderer: bold, headers, λίστες, αλλαγές γραμμής.
 // Φτιάχνει πάντα πραγματικά DOM nodes — ποτέ δεν περνάει κείμενο μέσα από innerHTML,
 // άρα ό,τι κείμενο επιστρέψει ο HAL (ή πληκτρολογήσει ο χρήστης) δεν εκτελείται ποτέ ως HTML/JS.
@@ -144,7 +143,7 @@ async function sendMessage() {
   addMessage('assistant', '⏳ HAL...');
   const r = await fetch('{{ url_for("client_hal_chat") }}', {
     method:'POST', headers:{'Content-Type':'application/json'},
-    body: JSON.stringify({messages, context: ctx})
+    body: JSON.stringify({messages})
   });
   const d = await r.json();
   document.getElementById('chat-messages').lastChild.remove();

@@ -13,6 +13,7 @@ from werkzeug.utils import secure_filename
 
 import models as m
 import hal_engine as hal
+import hal_scope
 
 # ── APP SETUP ──────────────────────────────────────────────────────────────────
 
@@ -849,7 +850,7 @@ def agent_client_detail(client_id):
     db = m.get_session()
     try:
         client = db.query(m.Client).get(client_id)
-        if not client:
+        if not client or not hal_scope.can_access_client(db, hal_scope.scope_from_session(session), client_id):
             abort(404)
         policies = db.query(m.Policy).filter_by(client_id=client_id).order_by(m.Policy.expiration_date).all()
         today = date.today()
@@ -1242,7 +1243,8 @@ def agent_delete_policy(policy_id):
 def agent_hal_policy(policy_id):
     db = m.get_session()
     policy = db.query(m.Policy).get(policy_id)
-    if not policy:
+    if not policy or not hal_scope.can_access_policy(db, hal_scope.scope_from_session(session), policy_id):
+        db.close()
         abort(404)
     client = db.query(m.Client).get(policy.client_id)
     explanation = policy.hal_summary
@@ -1267,8 +1269,12 @@ def agent_hal_policy(policy_id):
 @agent_required
 def agent_hal_upsell(client_id):
     db = m.get_session()
+    scope = hal_scope.scope_from_session(session)
     client = db.query(m.Client).get(client_id)
-    policies = db.query(m.Policy).filter_by(client_id=client_id, status=m.PolicyStatus.ACTIVE).all()
+    if not client or not hal_scope.can_access_client(db, scope, client_id):
+        db.close()
+        abort(404)
+    policies = hal_scope.policies_q(db, scope).filter_by(client_id=client_id, status=m.PolicyStatus.ACTIVE).all()
     client_data = {"name": client.name, "profession": client.profession,
                    "city": client.city, "company": client.company_name}
     pol_list = [{"type": p.policy_type, "sector": p.sector.value if p.sector else "",
@@ -1281,10 +1287,16 @@ def agent_hal_upsell(client_id):
 @app.route("/agent/hal/chat", methods=["POST"])
 @agent_required
 def agent_hal_chat():
+    """Staff HAL. Data access is decided by the server-side session, never by the request:
+    admin/backoffice see the whole book, scoped agents only their own policies/clients."""
     data = request.json or {}
-    messages = data.get("messages", [])
-    context = data.get("context", "")
-    response = hal.chat(messages, context)
+    messages = hal.sanitize_messages(data.get("messages", []))
+    if not messages:
+        return jsonify({"response": "Γράψε μια ερώτηση."})
+    scope  = hal_scope.scope_from_session(session)
+    system = hal_scope.system_prompt(hal.CHI_SYSTEM_CONTEXT, scope)
+    response = hal.chat_with_tools(messages, system, hal_scope.tools_for(scope),
+                                   hal_scope.make_executor(scope))
     return jsonify({"response": response})
 
 # Agent: Renewals (Ληξιάριο)
@@ -1356,7 +1368,7 @@ def agent_renewals():
 def agent_hal_renewal_draft(policy_id):
     db = m.get_session()
     policy = db.query(m.Policy).get(policy_id)
-    if not policy:
+    if not policy or not hal_scope.can_access_policy(db, hal_scope.scope_from_session(session), policy_id):
         db.close(); return jsonify({"error": "Not found"}), 404
     client = db.query(m.Client).get(policy.client_id)
     today  = date.today()
@@ -1903,10 +1915,22 @@ def _build_hal_context(client, policies) -> str:
 @app.route("/client/hal/chat", methods=["POST"])
 @client_required
 def client_hal_chat():
+    """Client HAL. Context is rebuilt server-side from the logged-in client only;
+    any 'context' sent by the browser is ignored."""
+    if session.get("role") != "client" or not session.get("client_id"):
+        return jsonify({"response": "Δεν επιτρέπεται."}), 403
     data = request.json or {}
-    messages = data.get("messages", [])
-    context  = data.get("context", "")
-    response = hal.chat(messages, context)
+    messages = hal.sanitize_messages(data.get("messages", []))
+    if not messages:
+        return jsonify({"response": "Γράψε μια ερώτηση."})
+    scope = hal_scope.scope_from_session(session)
+    db = m.get_session()
+    try:
+        context = hal_scope.client_context(db, scope)
+    finally:
+        db.close()
+    system = hal_scope.system_prompt(hal.CHI_SYSTEM_CONTEXT, scope, context)
+    response = hal.chat_with_tools(messages, system, [], None)
     return jsonify({"response": response})
 
 # ══════════════════════════════════════════════════════════════════════════════
